@@ -380,8 +380,14 @@ export default {
             return json({ error: 'The requested assignments have changed; refresh the roster and submit a new request' }, { status: 409 });
           }
           await env.DB.batch([
-            env.DB.prepare('UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE id = ?').bind(toAssignment.shift_code, fromAssignment.id),
-            env.DB.prepare('UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE id = ?').bind(fromAssignment.shift_code, toAssignment.id),
+            env.DB.prepare(
+              `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
+               WHERE id = ? AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(toAssignment.shift_code, fromAssignment.id, swapId),
+            env.DB.prepare(
+              `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
+               WHERE id = ? AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(fromAssignment.shift_code, toAssignment.id, swapId),
             env.DB.prepare("UPDATE swap_requests SET status = 'approved' WHERE id = ? AND status = 'pending'").bind(swapId),
           ]);
           const confirmed = await env.DB.prepare("SELECT status FROM swap_requests WHERE id = ?").bind(swapId).first();
