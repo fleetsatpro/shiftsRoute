@@ -71,6 +71,12 @@ npm run db:migrate:remote
 ```
 
 The ordered migrations live in `migrations/`. Do not execute them out of order.
+For a brand-new D1 database, apply all migrations in order. For an existing database
+that was previously initialized with `wrangler d1 execute --file`, stop first:
+inspect the live schema and Wrangler's `d1_migrations` history, back up the database,
+and reconcile the baseline before using `migrations apply`. Do not replay 0001–0003
+against populated tables. The repository cannot determine whether a remote database
+has already had those SQL files applied.
 Migration 0004 adds one-time enrollment, salted PBKDF2 PIN storage and login
 throttling. Existing legacy SHA-256 PINs are upgraded after the next successful
 login. Migration 0005 seeds Patrick after the auth columns exist.
