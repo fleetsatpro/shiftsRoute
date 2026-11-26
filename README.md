@@ -11,14 +11,14 @@ Cloudflare Workers + D1.
 
 | # | Description |
 |---|-------------|
-| 1 | **Solver: month-boundary rest rule broken** — `canAssign()` compared shift *type strings* (`'night'`) against actual shift *codes* (`'N'`, `'NC'`), so the Night→Day rest rule was never enforced across month boundaries. Fixed in `src/solver.js`. |
+| 1 | **Solver: month-boundary rest rule broken** — `canAssign()` compared shift *type strings* (`'night'`) against actual shift *codes* (`'N'`, `'NC'`), so the Night→Day rest rule was never enforced across month boundaries. Fixed in `solver.js`. |
 | 2 | **Wrong schedule loaded on dept switch** — `GET /api/schedules` had no department filter, so switching from ISOC to SCE returned the most-recently-generated schedule regardless of department. Fixed: `?department=` query param now honoured. |
 | 3 | **Coverage warning banner never showed** — the frontend checked `notes.includes('warning')` on a string that starts with `"Warnings:"` — case mismatch. Fixed to parse properly. |
 | 4 | **Grid cell click reloaded entire schedule** — caused full re-render and scroll-jump on every cell edit. Fixed: optimistic UI update + background data sync, no re-render. |
 | 5 | **`/api/schedules/:id/mine` 500 on missing schedule** — now returns 404 cleanly. |
 | 6 | **Assignment patch didn't verify row exists** — now returns 404 if the assignment isn't found. |
 | 7 | **`exportBtn` could be clicked with no schedule** — now guarded with a toast. |
-| 8 | **Stack traces leaked to clients in production** — `src/index.js` now only exposes `stack` when `env.ENVIRONMENT === 'development'`. |
+| 8 | **Stack traces leaked to clients in production** — `index.js` now only exposes `stack` when `env.ENVIRONMENT === 'development'`. |
 | 9 | **`alert()` used throughout** — replaced with a non-blocking toast notification system. |
 | 10 | **Non-admins couldn't see their own leave** — `GET /api/leave` now allows staff to fetch their own leave without admin role. |
 
@@ -60,22 +60,25 @@ wrangler d1 create roc-scheduler-db
 
 Copy the `database_id` into `wrangler.toml`.
 
-### 3. Run all migrations
+### 3. Apply ordered migrations
 
 ```bash
-# --- Local dev ---
-wrangler d1 execute roc-scheduler-db --local --file=./migrations/0001_init.sql
-wrangler d1 execute roc-scheduler-db --local --file=./migrations/0002_auth.sql
-wrangler d1 execute roc-scheduler-db --local --file=./migrations/0003_prod.sql
+# Local development
+npm run db:migrate:local
 
-# --- Production ---
-wrangler d1 execute roc-scheduler-db --remote --file=./migrations/0001_init.sql
-wrangler d1 execute roc-scheduler-db --remote --file=./migrations/0002_auth.sql
-wrangler d1 execute roc-scheduler-db --remote --file=./migrations/0003_prod.sql
+# Production — only after reviewing the target D1 database and backup
+npm run db:migrate:remote
 ```
 
-> **Upgrading from the original build?** Run only `0003_prod.sql` — it's safe to
-> run on a database that already has tables from `0001` and `0002`.
+The ordered migrations live in `migrations/`. Do not execute them out of order.
+Migration 0004 adds one-time enrollment, salted PBKDF2 PIN storage and login
+throttling. Existing legacy SHA-256 PINs are upgraded after the next successful
+login. Migration 0005 seeds Patrick after the auth columns exist.
+
+Set the Worker secret `INITIAL_ADMIN_ENROLLMENT_SECRET` before first use. Use a
+long random secret (at least 32 random bytes) and deliver it securely to the
+initial admin only. Admins issue one-time enrollment codes when resetting staff
+PINs; codes are displayed once and must be shared privately.
 
 ### 4. Dev
 
@@ -147,3 +150,33 @@ requests and approve or reject them from the same tab.
 | PATCH | `/api/schedules/:id/assignment` | **admin** | Manual override |
 | POST | `/api/schedules/:id/publish` | **admin** | Publish |
 | GET | `/api/schedules/:id/export` | session | Download CSV |
+
+## Security and release notes
+
+- The Worker source is `index.js`; static assets are served from `public/`.
+  Wrangler configuration points to these committed paths.
+- Non-admin staff receive only their own department's roster, schedule details
+  and CSV exports. Authorization is enforced by the Worker, not only the UI.
+- Published schedules are immutable. Corrections require a new draft version.
+- Approving a swap applies both assignment changes to the latest editable draft
+  and updates the request status together.
+- New PINs are exactly six digits, PBKDF2-derived with a per-user random salt.
+  Legacy PIN hashes are upgraded after successful authentication.
+- Session cookies are random 256-bit secrets; only SHA-256 verifiers are stored
+  in D1. Sessions expire after seven days and are invalidated on PIN reset.
+- Failed PIN attempts are throttled per staff identifier and Cloudflare-observed
+  client IP. Raw IP addresses are not stored in the attempts table.
+- The old v2 ZIP was removed from the current branch because it contained
+  unauthenticated API routes. It must not be deployed or restored without a
+  complete authentication and authorization implementation.
+- `npm test` runs the solver regression suite. CI checks JavaScript syntax and
+  solver invariants. A green CI run is required before merge.
+- This branch does not deploy to production.
+
+## Required environment configuration
+
+| Variable | Purpose |
+|---|---|
+| `INITIAL_ADMIN_ENROLLMENT_SECRET` | One-time bootstrap for the initial admin account; store as a Worker secret only |
+| `ENVIRONMENT` | Set to `production` in production; stack traces remain hidden |
+| D1 `database_id` | Replace the placeholder in `wrangler.toml` with the intended D1 database ID |
