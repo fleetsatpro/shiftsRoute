@@ -1,11 +1,18 @@
-name = "roc-shift-scheduler"
+name = "routesa"
 main = "index.js"
-compatibility_date = "2025-09-01"
+compatibility_date = "2026-07-24"
+workers_dev = false
+preview_urls = false
 
+[vars]
+ENVIRONMENT = "production"
+
+# Existing production D1 database. Migrations are intentionally not applied
+# to this database as part of the pull-request validation workflow.
 [[d1_databases]]
 binding = "DB"
-database_name = "roc-scheduler-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "raw-ter-shift"
+database_id = "198290bf-6d88-4225-96c1-a525c57f41eb"
 migrations_dir = "migrations"
 
 [assets]
