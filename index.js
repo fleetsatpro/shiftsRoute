@@ -93,7 +93,11 @@ export default {
         ).bind(staff_id).first();
         if (!person) return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         if (person.pin_set) return json({ error: 'PIN already set — use login instead' }, { status: 409 });
-        const bootstrapAllowed = person.role === 'admin'
+        const bootstrapClaim = await env.DB.prepare(
+          "SELECT value FROM app_settings WHERE key = 'initial_admin_enrolled'"
+        ).first();
+        const bootstrapAllowed = !bootstrapClaim
+          && person.role === 'admin'
           && typeof env.INITIAL_ADMIN_ENROLLMENT_SECRET === 'string'
           && safeEqual(enrollment_code, env.INITIAL_ADMIN_ENROLLMENT_SECRET);
         const issuedCodeAllowed = !!person.enrollment_hash
@@ -102,10 +106,19 @@ export default {
           return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         }
         const credential = await hashPin(pin);
-        const enrolled = await env.DB.prepare(
-          'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
-        ).bind(credential.hash, credential.salt, staff_id).run();
-        if (!enrolled.meta?.changes) return json({ error: 'Account enrollment already completed; sign in instead' }, { status: 409 });
+        const statements = [
+          env.DB.prepare(
+            'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
+          ).bind(credential.hash, credential.salt, staff_id),
+        ];
+        if (bootstrapAllowed) {
+          statements.push(env.DB.prepare(
+            "INSERT INTO app_settings (key, value) VALUES ('initial_admin_enrolled', ?)"
+          ).bind(new Date().toISOString()));
+        }
+        await env.DB.batch(statements);
+        const enrolled = await env.DB.prepare('SELECT pin_set FROM staff WHERE id = ?').bind(staff_id).first();
+        if (!enrolled?.pin_set) return json({ error: 'Account enrollment could not be completed' }, { status: 409 });
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 201, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
