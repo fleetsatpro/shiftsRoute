@@ -75,4 +75,3 @@ INSERT INTO staff (id, name, department_id) VALUES
   ('griffin', 'Griffin', 'SCE'),
   ('chebet', 'Chebet', 'SCE'),
   ('moreen', 'Moreen', 'SCE');
-\n
