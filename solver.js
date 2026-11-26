@@ -186,7 +186,9 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
       if (code === dayCode || code === nightCode) {
         let run = 0;
         for (let dd = d; dd >= 1 && (state[staffId][dd] === dayCode || state[staffId][dd] === nightCode); dd--) run++;
-        if (d === run && d === 1) run += priorFinalState?.[staffId]?.consecutiveWork ?? 0;
+        if (d === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
+          run += priorFinalState[staffId].consecutiveWork ?? 0;
+        }
         if (run > 5) return false;
       }
     }
