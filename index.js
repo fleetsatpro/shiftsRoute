@@ -76,7 +76,7 @@ export default {
       // ── Auth: no session required ─────────────────────────────────────
       if (pathname === '/api/auth/people' && request.method === 'GET') {
         const { results } = await env.DB.prepare(
-          'SELECT id, name, department_id FROM staff WHERE active = 1 ORDER BY department_id, name'
+          'SELECT id, name, department_id, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name'
         ).all();
         return json(results);
       }
