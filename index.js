@@ -74,7 +74,7 @@ export default {
       // ── Auth: no session required ─────────────────────────────────────
       if (pathname === '/api/auth/people' && request.method === 'GET') {
         const { results } = await env.DB.prepare(
-          'SELECT id, name, department_id, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name'
+          'SELECT id, name, department_id FROM staff WHERE active = 1 ORDER BY department_id, name'
         ).all();
         return json(results);
       }
@@ -155,7 +155,8 @@ export default {
 
       // ── Staff ─────────────────────────────────────────────────────────
       if (pathname === '/api/staff' && request.method === 'GET') {
-        const dept = url.searchParams.get('department');
+        const requestedDept = url.searchParams.get('department');
+        const dept = isAdmin ? requestedDept : me.department_id;
         const stmt = dept
           ? env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE department_id = ? AND active = 1 ORDER BY name').bind(dept)
           : env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name');
@@ -380,7 +381,12 @@ export default {
         let query = 'SELECT * FROM schedules WHERE 1=1';
         const binds = [];
         if (month) { query += ' AND month = ?'; binds.push(month); }
-        if (dept)  { query += ' AND department_id = ?'; binds.push(dept); }
+        if (isAdmin) {
+          if (dept) { query += ' AND department_id = ?'; binds.push(dept); }
+        } else {
+          query += ' AND department_id = ?';
+          binds.push(me.department_id);
+        }
         query += ' ORDER BY generated_at DESC';
         const { results } = await env.DB.prepare(query).bind(...binds).all();
         return json(results);
@@ -437,6 +443,9 @@ export default {
         const id = scheduleMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
         if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!isAdmin && schedule.department_id !== me.department_id) {
+          return json({ error: 'Schedule not found' }, { status: 404 });
+        }
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override
@@ -456,6 +465,11 @@ export default {
         if (denied) return denied;
 
         const scheduleId = patchMatch[1];
+        const targetSchedule = await env.DB.prepare('SELECT status FROM schedules WHERE id = ?').bind(scheduleId).first();
+        if (!targetSchedule) return json({ error: 'Schedule not found' }, { status: 404 });
+        if (targetSchedule.status === 'published') {
+          return json({ error: 'Published schedules are immutable. Create a new draft version to make changes.' }, { status: 409 });
+        }
         const body = await request.json();
         const { staff_id, date, shift_code } = body;
 
@@ -487,7 +501,11 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
         const id = publishMatch[1];
-        await env.DB.prepare("UPDATE schedules SET status = 'published' WHERE id = ?").bind(id).run();
+        const schedule = await env.DB.prepare('SELECT id, status FROM schedules WHERE id = ?').bind(id).first();
+        if (!schedule) return json({ error: 'Schedule not found' }, { status: 404 });
+        if (schedule.status === 'published') return json({ error: 'Schedule is already published' }, { status: 409 });
+        const result = await env.DB.prepare("UPDATE schedules SET status = 'published' WHERE id = ? AND status = 'draft'").bind(id).run();
+        if (!result.meta?.changes) return json({ error: 'Schedule state changed; reload and retry' }, { status: 409 });
         return json({ published: true });
       }
 
@@ -497,6 +515,9 @@ export default {
         const id = exportMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
         if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!isAdmin && schedule.department_id !== me.department_id) {
+          return json({ error: 'Schedule not found' }, { status: 404 });
+        }
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code
