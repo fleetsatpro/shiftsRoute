@@ -52,13 +52,27 @@ npm install -g wrangler
 wrangler login
 ```
 
-### 2. Create D1 database
+### 2. D1 databases and deployment targets
 
-```
-wrangler d1 create roc-scheduler-db
-```
+The existing production database is **`raw-ter-shift`**. Its ID is configured in
+`wrangler.toml`; do not create a replacement database or substitute an ID from
+another Cloudflare account.
 
-Copy the `database_id` into `wrangler.toml`.
+The isolated non-production database is **`raw-ter-shift-preview`**. The
+`routesa` and `shiftsroutes` preview configurations both bind to this database.
+The five repository migrations have been applied there and recorded in
+`d1_migrations`. The production database has deliberately been left untouched.
+
+Non-production Workers Builds upload unpublished versions using
+`wrangler.routesa.preview.toml` or `wrangler.shiftsroutes.preview.toml`.
+These configurations use the preview database and disable Workers.dev and
+version-preview URLs. The branch build command is `wrangler versions upload`,
+which uploads a version without deploying it to traffic.
+
+The default-branch triggers remain production deployment triggers. They run
+`wrangler deploy` against the production configuration when `main` is built;
+merging this PR is therefore a production-release action and must happen only
+after production migrations, secrets, and release checks have been approved.
 
 ### 3. Apply ordered migrations
 
@@ -66,7 +80,10 @@ Copy the `database_id` into `wrangler.toml`.
 # Local development
 npm run db:migrate:local
 
-# Production — only after reviewing the target D1 database and backup
+# Isolated Cloudflare preview database
+npm run db:migrate:preview
+
+# Production — only after backup, schema review, and explicit release approval
 npm run db:migrate:remote
 ```
 
@@ -80,6 +97,12 @@ has already had those SQL files applied.
 Migration 0004 adds one-time enrollment, salted PBKDF2 PIN storage and login
 throttling. Existing legacy SHA-256 PINs are upgraded after the next successful
 login. Migration 0005 seeds Patrick after the auth columns exist.
+
+The preview database has been initialized with migrations 0001–0005 and
+verified to contain 16 seeded staff across ISOC and SCE, the expected auth and
+scheduling tables, and migration records for all five files. The production
+database remains uninitialized; do not apply the remote migration command until
+the release has been explicitly authorized.
 
 Set the Worker secret `INITIAL_ADMIN_ENROLLMENT_SECRET` before first use. Use a
 long random secret (at least 32 random bytes) and deliver it securely to the
@@ -177,7 +200,12 @@ requests and approve or reject them from the same tab.
   complete authentication and authorization implementation.
 - `npm test` runs the solver regression suite. CI checks JavaScript syntax and
   solver invariants. A green CI run is required before merge.
-- This branch does not deploy to production.
+- Non-production Workers Builds upload unpublished versions to `routesa` and
+  `shiftsroutes` using isolated preview D1 configuration; no branch build
+  deploys traffic or writes to the production database.
+- Production D1 `raw-ter-shift` is configured but has not been migrated.
+  Production deployment triggers remain attached to `main`; do not merge or
+  push to `main` until the production release is approved.
 
 ## Required environment configuration
 
@@ -185,4 +213,5 @@ requests and approve or reject them from the same tab.
 |---|---|
 | `INITIAL_ADMIN_ENROLLMENT_SECRET` | One-time bootstrap for the initial admin account; store as a Worker secret only |
 | `ENVIRONMENT` | Set to `production` in production; stack traces remain hidden |
-| D1 `database_id` | Replace the placeholder in `wrangler.toml` with the intended D1 database ID |
+| Production D1 | Existing `raw-ter-shift` database, configured in `wrangler.toml` |
+| Preview D1 | Isolated `raw-ter-shift-preview` database, configured in the two preview Wrangler files |
