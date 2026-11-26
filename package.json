@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:shiftsroutes": "wrangler deploy --config wrangler.shiftsroutes.toml",
     "test": "node --test",
-    "db:create": "wrangler d1 create roc-scheduler-db",
-    "db:migrate:local": "wrangler d1 migrations apply roc-scheduler-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply roc-scheduler-db --remote"
+    "db:migrate:local": "wrangler d1 migrations apply raw-ter-shift --local",
+    "db:migrate:preview": "wrangler d1 migrations apply raw-ter-shift-preview --remote --config wrangler.routesa.preview.toml",
+    "db:migrate:remote": "wrangler d1 migrations apply raw-ter-shift --remote --config wrangler.toml"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
