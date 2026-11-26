@@ -24,6 +24,8 @@
 import { generateSchedule, daysInMonth, dateStr } from './solver.js';
 import {
   sha256Hex,
+  hashPin,
+  safeEqual,
   isValidPin,
   getCurrentStaff,
   createSession,
@@ -81,16 +83,29 @@ export default {
 
       if (pathname === '/api/auth/set-pin' && request.method === 'POST') {
         const body = await request.json();
-        const { staff_id, pin } = body;
-        if (!isValidPin(pin)) return json({ error: 'PIN must be 4–6 digits' }, { status: 400 });
+        const { staff_id, pin, enrollment_code } = body;
+        if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
+        if (typeof enrollment_code !== 'string' || enrollment_code.length < 16 || enrollment_code.length > 256) {
+          return json({ error: 'A valid one-time enrollment code is required' }, { status: 403 });
+        }
         const person = await env.DB.prepare(
-          'SELECT id, pin_set FROM staff WHERE id = ? AND active = 1'
+          'SELECT id, pin_set, role, enrollment_hash FROM staff WHERE id = ? AND active = 1'
         ).bind(staff_id).first();
-        if (!person) return json({ error: 'Unknown staff member' }, { status: 404 });
+        if (!person) return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         if (person.pin_set) return json({ error: 'PIN already set — use login instead' }, { status: 409 });
-        const hash = await sha256Hex(pin);
-        await env.DB.prepare('UPDATE staff SET pin_hash = ?, pin_set = 1 WHERE id = ?')
-          .bind(hash, staff_id).run();
+        const bootstrapAllowed = person.role === 'admin'
+          && typeof env.INITIAL_ADMIN_ENROLLMENT_SECRET === 'string'
+          && safeEqual(enrollment_code, env.INITIAL_ADMIN_ENROLLMENT_SECRET);
+        const issuedCodeAllowed = !!person.enrollment_hash
+          && safeEqual(await sha256Hex(enrollment_code), person.enrollment_hash);
+        if (!bootstrapAllowed && !issuedCodeAllowed) {
+          return json({ error: 'Enrollment could not be verified' }, { status: 403 });
+        }
+        const credential = await hashPin(pin);
+        const enrolled = await env.DB.prepare(
+          'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
+        ).bind(credential.hash, credential.salt, staff_id).run();
+        if (!enrolled.meta?.changes) return json({ error: 'Account enrollment already completed; sign in instead' }, { status: 409 });
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 201, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
@@ -100,12 +115,23 @@ export default {
         const { staff_id, pin } = body;
         if (!isValidPin(pin)) return json({ error: 'PIN must be 4–6 digits' }, { status: 400 });
         const person = await env.DB.prepare(
-          'SELECT id, pin_hash, pin_set FROM staff WHERE id = ? AND active = 1'
+          'SELECT id, pin_hash, pin_salt, pin_set FROM staff WHERE id = ? AND active = 1'
         ).bind(staff_id).first();
-        if (!person) return json({ error: 'Unknown staff member' }, { status: 404 });
-        if (!person.pin_set) return json({ error: 'No PIN set yet — select "Set PIN & sign in"' }, { status: 409 });
-        const hash = await sha256Hex(pin);
-        if (hash !== person.pin_hash) return json({ error: 'Incorrect PIN' }, { status: 401 });
+        if (!person || !person.pin_set) return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        let valid = false;
+        if (person.pin_salt) {
+          const candidate = await hashPin(pin, person.pin_salt);
+          valid = safeEqual(candidate.hash, person.pin_hash);
+        } else {
+          // One-time compatibility path: upgrade legacy unsalted SHA-256 PINs after successful login.
+          valid = safeEqual(await sha256Hex(pin), person.pin_hash || '');
+          if (valid) {
+            const upgraded = await hashPin(pin);
+            await env.DB.prepare('UPDATE staff SET pin_hash = ?, pin_salt = ? WHERE id = ? AND pin_salt IS NULL')
+              .bind(upgraded.hash, upgraded.salt, staff_id).run();
+          }
+        }
+        if (!valid) return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 200, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
@@ -139,12 +165,16 @@ export default {
         if (denied) return denied;
         const body = await request.json();
         const { staff_id } = body;
-        await env.DB.prepare(
-          'UPDATE staff SET pin_hash = NULL, pin_set = 0 WHERE id = ?'
-        ).bind(staff_id).run();
-        // Invalidate all existing sessions for that staff member
-        await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staff_id).run();
-        return json({ ok: true, staff_id });
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(staff_id).first();
+        if (!target?.active) return json({ error: 'Active staff account not found' }, { status: 404 });
+        const enrollmentCode = [...crypto.getRandomValues(new Uint8Array(24))]
+          .map((b) => b.toString(16).padStart(2, '0')).join('');
+        await env.DB.batch([
+          env.DB.prepare('UPDATE staff SET pin_hash = NULL, pin_salt = NULL, pin_set = 0, enrollment_hash = ? WHERE id = ?')
+            .bind(await sha256Hex(enrollmentCode), staff_id),
+          env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staff_id),
+        ]);
+        return json({ ok: true, staff_id, enrollment_code: enrollmentCode });
       }
 
       // ── Departments ───────────────────────────────────────────────────
