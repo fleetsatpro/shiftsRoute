@@ -113,11 +113,19 @@ export default {
       if (pathname === '/api/auth/login' && request.method === 'POST') {
         const body = await request.json();
         const { staff_id, pin } = body;
-        if (!isValidPin(pin)) return json({ error: 'PIN must be 4–6 digits' }, { status: 400 });
+        if (typeof staff_id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(staff_id)) {
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
+        if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
+        const throttle = await checkLoginThrottle(request, env.DB, staff_id);
+        if (throttle.blocked) return json({ error: 'Too many sign-in attempts. Try again later.' }, { status: 429 });
         const person = await env.DB.prepare(
           'SELECT id, pin_hash, pin_salt, pin_set FROM staff WHERE id = ? AND active = 1'
         ).bind(staff_id).first();
-        if (!person || !person.pin_set) return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        if (!person || !person.pin_set) {
+          await recordLoginFailure(env.DB, throttle.key);
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
         let valid = false;
         if (person.pin_salt) {
           const candidate = await hashPin(pin, person.pin_salt);
@@ -131,7 +139,11 @@ export default {
               .bind(upgraded.hash, upgraded.salt, staff_id).run();
           }
         }
-        if (!valid) return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        if (!valid) {
+          await recordLoginFailure(env.DB, throttle.key);
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
+        await clearLoginFailures(env.DB, throttle.key);
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 200, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
@@ -611,6 +623,34 @@ export default {
     }
   },
 };
+
+
+async function checkLoginThrottle(request, db, staffId) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const key = await sha256Hex(`${staffId.toLowerCase()}:${ip}`);
+  const row = await db.prepare('SELECT blocked_until FROM auth_attempts WHERE attempt_key = ?').bind(key).first();
+  return { key, blocked: Number(row?.blocked_until || 0) > Date.now() };
+}
+
+async function recordLoginFailure(db, key) {
+  const now = Date.now();
+  const windowStart = now - 15 * 60 * 1000;
+  const blockedUntil = now + 15 * 60 * 1000;
+  await db.prepare(`
+    INSERT INTO auth_attempts (attempt_key, window_started_at, attempts, blocked_until)
+    VALUES (?, ?, 1, NULL)
+    ON CONFLICT(attempt_key) DO UPDATE SET
+      attempts = CASE WHEN auth_attempts.window_started_at <= ? THEN 1 ELSE auth_attempts.attempts + 1 END,
+      window_started_at = CASE WHEN auth_attempts.window_started_at <= ? THEN ? ELSE auth_attempts.window_started_at END,
+      blocked_until = CASE
+        WHEN (CASE WHEN auth_attempts.window_started_at <= ? THEN 1 ELSE auth_attempts.attempts + 1 END) >= 5
+        THEN ? ELSE auth_attempts.blocked_until END
+  `).bind(key, now, windowStart, windowStart, now, windowStart, blockedUntil).run();
+}
+
+async function clearLoginFailures(db, key) {
+  await db.prepare('DELETE FROM auth_attempts WHERE attempt_key = ?').bind(key).run();
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
