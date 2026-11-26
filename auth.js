@@ -45,9 +45,10 @@ export function safeEqual(a, b) {
 }
 
 export function isValidPin(pin) {
-  return typeof pin === 'string' && /^\\d{6}$/.test(pin);
+  return typeof pin === 'string' && /^\d{6}$/.test(pin);
 }
-\nexport function parseCookies(request) {
+
+export function parseCookies(request) {
   const header = request.headers.get('Cookie') || '';
   const out = {};
   for (const part of header.split(';')) {
