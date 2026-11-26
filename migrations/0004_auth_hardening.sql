@@ -12,3 +12,10 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   blocked_until INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_auth_attempts_blocked ON auth_attempts(blocked_until);
+
+-- One-time bootstrap latch: prevents reusing the initial-admin secret to enroll
+-- multiple seeded administrator accounts.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
