@@ -768,7 +768,11 @@
     <select id="personSelect"></select>
 
     <label for="pinInput" id="pinLabel">PIN</label>
-    <input type="password" id="pinInput" inputmode="numeric" maxlength="6" placeholder="4-6 digit PIN" autocomplete="current-password" />
+    <input type="password" id="pinInput" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" autocomplete="current-password" />
+    <div id="enrollmentWrap" class="hidden">
+      <label for="enrollmentInput">One-time enrollment code</label>
+      <input type="password" id="enrollmentInput" autocomplete="one-time-code" placeholder="Code supplied by your administrator" />
+    </div>
 
     <div id="loginError" class="login-error hidden"></div>
     <button id="loginBtn" class="primary">Sign in</button>
@@ -1145,21 +1149,23 @@ async function initLogin() {
 function updatePinLabel() {
   const opt = el('personSelect').options[el('personSelect').selectedIndex];
   const pinSet = opt?.dataset.pinSet === '1';
-  el('pinLabel').textContent = pinSet ? 'PIN' : 'Create a PIN (4–6 digits)';
-  el('pinInput').placeholder = pinSet ? 'Enter your PIN' : 'Choose a 4–6 digit PIN';
+  el('pinLabel').textContent = pinSet ? 'PIN' : 'Create a PIN (6 digits)';
+  el('pinInput').placeholder = pinSet ? 'Enter your 6-digit PIN' : 'Choose a 6-digit PIN';
+  el('enrollmentWrap').classList.toggle('hidden', pinSet);
   el('loginBtn').textContent  = pinSet ? 'Sign in' : 'Set PIN & sign in';
-  el('loginHint').textContent = pinSet ? '' : "First time? Choose a PIN you'll remember — you can't recover it without your admin.";
+  el('loginHint').textContent = pinSet ? '' : 'First-time setup requires a one-time code from your administrator.';
 }
 
 async function attemptLogin() {
   const staffId = el('personSelect').value;
   const pin = el('pinInput').value.trim();
+  const enrollment_code = el('enrollmentInput').value.trim();
   const opt = el('personSelect').options[el('personSelect').selectedIndex];
   const pinSet = opt?.dataset.pinSet === '1';
 
   el('loginError').classList.add('hidden');
-  if (!/^\d{4,6}$/.test(pin)) {
-    el('loginError').textContent = 'PIN must be 4–6 digits.';
+  if (!/^\d{6}$/.test(pin)) {
+    el('loginError').textContent = 'PIN must be exactly 6 digits.';
     el('loginError').classList.remove('hidden');
     return;
   }
@@ -1171,7 +1177,7 @@ async function attemptLogin() {
     await api(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ staff_id: staffId, pin }),
+      body: JSON.stringify({ staff_id: staffId, pin, ...(pinSet ? {} : { enrollment_code }) }),
     });
     await startApp();
   } catch(e) {
@@ -1401,13 +1407,14 @@ async function logout() {
 async function resetPin(staffId, name) {
   if (!confirm(`Reset PIN for ${name}? They will need to set a new PIN on next login.`)) return;
   try {
-    await api('/auth/reset-pin', {
+    const result = await api('/auth/reset-pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staff_id: staffId }),
     });
     await loadStaffTable();
-    toast(`PIN reset for ${name}.`, 'success');
+    window.prompt(`Share this one-time enrollment code securely with ${name}. It will not be shown again:`, result.enrollment_code);
+    toast(`PIN reset for ${name}; one-time code issued.`, 'success');
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
