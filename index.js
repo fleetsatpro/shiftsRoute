@@ -240,7 +240,9 @@ export default {
           const s = await env.DB.prepare(
             'SELECT id, name, department_id, role, pin_set FROM staff WHERE id = ? AND active = 1'
           ).bind(staffId).first();
-          if (!s) return json({ error: 'Not found' }, { status: 404 });
+          if (!s || (!isAdmin && s.department_id !== me.department_id)) {
+            return json({ error: 'Not found' }, { status: 404 });
+          }
           return json(s);
         }
         if (request.method === 'PATCH') {
@@ -485,7 +487,9 @@ export default {
       if (mineMatch && request.method === 'GET') {
         const id = mineMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
-        if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!schedule || schedule.department_id !== me.department_id) {
+          return json({ error: 'Not found' }, { status: 404 });
+        }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
           .bind(me.department_id).first();
