@@ -294,9 +294,42 @@ export default {
           if (!['approve', 'reject'].includes(action)) {
             return json({ error: 'action must be approve or reject' }, { status: 400 });
           }
-          await env.DB.prepare('UPDATE swap_requests SET status = ? WHERE id = ?')
-            .bind(action === 'approve' ? 'approved' : 'rejected', swapId).run();
-          return json({ updated: true });
+          const swap = await env.DB.prepare('SELECT * FROM swap_requests WHERE id = ?').bind(swapId).first();
+          if (!swap) return json({ error: 'Swap request not found' }, { status: 404 });
+          if (swap.status !== 'pending') return json({ error: 'Only pending swap requests can be reviewed' }, { status: 409 });
+          if (action === 'reject') {
+            const result = await env.DB.prepare("UPDATE swap_requests SET status = 'rejected' WHERE id = ? AND status = 'pending'").bind(swapId).run();
+            if (!result.meta?.changes) return json({ error: 'Request state changed; reload and retry' }, { status: 409 });
+            return json({ updated: true, status: 'rejected' });
+          }
+
+          const [fromStaff, toStaff] = await Promise.all([
+            env.DB.prepare('SELECT id, department_id, active FROM staff WHERE id = ?').bind(swap.from_staff_id).first(),
+            env.DB.prepare('SELECT id, department_id, active FROM staff WHERE id = ?').bind(swap.to_staff_id).first(),
+          ]);
+          if (!fromStaff?.active || !toStaff?.active || fromStaff.department_id !== toStaff.department_id) {
+            return json({ error: 'Both staff members must be active in the same department' }, { status: 409 });
+          }
+          const month = swap.date.slice(0, 7);
+          const schedule = await env.DB.prepare(
+            "SELECT id FROM schedules WHERE month = ? AND department_id = ? AND status = 'draft' ORDER BY generated_at DESC LIMIT 1"
+          ).bind(month, fromStaff.department_id).first();
+          if (!schedule) return json({ error: 'No editable draft schedule exists for this date; generate a draft before approving the swap' }, { status: 409 });
+          const [fromAssignment, toAssignment] = await Promise.all([
+            env.DB.prepare('SELECT id, shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?').bind(schedule.id, swap.from_staff_id, swap.date).first(),
+            env.DB.prepare('SELECT id, shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?').bind(schedule.id, swap.to_staff_id, swap.date).first(),
+          ]);
+          if (!fromAssignment || !toAssignment || fromAssignment.shift_code !== swap.shift_code) {
+            return json({ error: 'The requested assignments have changed; refresh the roster and submit a new request' }, { status: 409 });
+          }
+          await env.DB.batch([
+            env.DB.prepare('UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE id = ?').bind(toAssignment.shift_code, fromAssignment.id),
+            env.DB.prepare('UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE id = ?').bind(fromAssignment.shift_code, toAssignment.id),
+            env.DB.prepare("UPDATE swap_requests SET status = 'approved' WHERE id = ? AND status = 'pending'").bind(swapId),
+          ]);
+          const confirmed = await env.DB.prepare("SELECT status FROM swap_requests WHERE id = ?").bind(swapId).first();
+          if (confirmed?.status !== 'approved') return json({ error: 'Swap could not be committed; reload and retry' }, { status: 409 });
+          return json({ updated: true, status: 'approved', schedule_id: schedule.id });
         }
         if (request.method === 'DELETE') {
           const swap = await env.DB.prepare('SELECT * FROM swap_requests WHERE id = ?').bind(swapId).first();
