@@ -576,9 +576,15 @@ export default {
         ).bind(scheduleId, staff_id, date).first();
         if (!existing) return json({ error: 'Assignment not found' }, { status: 404 });
 
-        await env.DB.prepare(
-          'UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE schedule_id = ? AND staff_id = ? AND date = ?'
-        ).bind(shift_code, scheduleId, staff_id, date).run();
+        const update = await env.DB.prepare(
+          `UPDATE shift_assignments
+           SET shift_code = ?, is_manual_override = 1
+           WHERE schedule_id = ? AND staff_id = ? AND date = ?
+             AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')`
+        ).bind(shift_code, scheduleId, staff_id, date, scheduleId).run();
+        if (!update.meta?.changes) {
+          return json({ error: 'Schedule is no longer editable; reload before making changes' }, { status: 409 });
+        }
 
         return json({ updated: true });
       }
