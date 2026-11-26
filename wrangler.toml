@@ -1,14 +1,15 @@
 name = "roc-shift-scheduler"
-main = "src/index.js"
+main = "index.js"
 compatibility_date = "2025-09-01"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "roc-scheduler-db"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
 
-# Static assets (the dashboard) are served from ./public
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
