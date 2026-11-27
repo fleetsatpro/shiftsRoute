@@ -900,6 +900,104 @@
     #staffSearch { min-width: 100%; }
   }
 
+
+  /* ── Premium adaptive visual system ─────────────────────── */
+  :root {
+    color-scheme: dark;
+    --bg: #080d18;
+    --bg-2: rgba(12,19,34,.88);
+    --panel: rgba(17,27,46,.88);
+    --panel-2: rgba(25,39,64,.86);
+    --panel-3: rgba(34,51,80,.96);
+    --border: rgba(133,164,211,.18);
+    --border-2: rgba(151,183,231,.3);
+    --text: #edf4ff;
+    --text-2: #aabbd5;
+    --text-3: #7185a5;
+    --accent: #65e6d0;
+    --accent-dim: #145d5b;
+    --accent-glow: rgba(101,230,208,.14);
+    --blue: #7db9ff;
+    --shadow-card: 0 16px 42px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.045);
+    --radius: 10px;
+    --radius-lg: 16px;
+  }
+  html { background: var(--bg); }
+  body {
+    background:
+      radial-gradient(ellipse at 8% -12%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 42%),
+      radial-gradient(ellipse at 94% 5%, color-mix(in srgb, var(--blue) 13%, transparent), transparent 38%),
+      linear-gradient(145deg, var(--bg), #080d18 58%, var(--bg-2));
+    background-attachment: fixed;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    opacity: .18;
+    background-image: linear-gradient(rgba(160,190,230,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(160,190,230,.045) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(to bottom, black, transparent 82%);
+  }
+  header {
+    background: color-mix(in srgb, var(--bg-2) 84%, transparent);
+    border-bottom-color: var(--border);
+    box-shadow: 0 8px 28px rgba(0,0,0,.16);
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+  }
+  .wordmark { text-shadow: 0 0 24px color-mix(in srgb, var(--accent) 28%, transparent); }
+  aside { background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 66%, transparent), transparent); border-right-color: var(--border); }
+  .nav-btn { transition: background .24s ease, color .24s ease, padding-left .24s cubic-bezier(.2,.8,.2,1), box-shadow .24s ease; }
+  .nav-btn:hover { padding-left: 20px; }
+  .nav-btn.active { box-shadow: inset 3px 0 var(--accent), 0 0 26px var(--accent-glow); border-left: 0; }
+  .panel, .login-card, .modal, .loading-card {
+    background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, white 2%), color-mix(in srgb, var(--panel) 94%, var(--accent) 2%));
+    border-color: var(--border-2);
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+  }
+  .panel { transition: border-color .28s ease, box-shadow .28s ease, transform .28s cubic-bezier(.2,.8,.2,1); }
+  .panel:hover { border-color: color-mix(in srgb, var(--accent) 42%, var(--border-2)); box-shadow: 0 20px 48px rgba(0,0,0,.3), 0 0 28px var(--accent-glow), inset 0 1px rgba(255,255,255,.055); }
+  .metric-card {
+    position: relative; overflow: hidden;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--panel-2) 90%, var(--accent) 10%), color-mix(in srgb, var(--panel) 96%, var(--blue) 4%));
+    border-color: var(--border-2); border-radius: 13px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.2), inset 0 1px rgba(255,255,255,.07);
+    transition: transform .32s cubic-bezier(.2,.8,.2,1), border-color .32s, box-shadow .32s;
+    animation: metric-arrive .65s both;
+  }
+  .metric-card::after { content:""; position:absolute; inset:-80% -30%; background: linear-gradient(105deg, transparent 42%, rgba(255,255,255,.07) 50%, transparent 58%); transform: translateX(-55%) rotate(8deg); transition: transform .8s ease; pointer-events:none; }
+  .metric-card:hover { transform: translateY(-4px); border-color: color-mix(in srgb, var(--accent) 65%, white 8%); box-shadow: 0 18px 38px rgba(0,0,0,.28), 0 0 24px var(--accent-glow); }
+  .metric-card:hover::after { transform: translateX(55%) rotate(8deg); }
+  .metric-card strong { letter-spacing: -.055em; text-shadow: 0 0 26px var(--accent-glow); }
+  button, select, input { transition: background .22s ease, border-color .22s ease, color .22s ease, box-shadow .22s ease, transform .22s ease; }
+  button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 7px 18px rgba(0,0,0,.18); }
+  button.primary { background: linear-gradient(115deg, var(--accent-dim), color-mix(in srgb, var(--accent-dim) 70%, var(--blue) 30%)); }
+  button.primary:hover:not(:disabled) { box-shadow: 0 0 24px var(--accent-glow); }
+  input:focus, select:focus { box-shadow: 0 0 0 3px var(--accent-glow), 0 0 22px var(--accent-glow); }
+  .tab-pane:not(.hidden) { animation: workspace-enter .42s cubic-bezier(.2,.8,.2,1) both; }
+  .page-title h1 { letter-spacing: -.035em; text-shadow: 0 5px 28px rgba(0,0,0,.24); }
+  .theme-control { display:flex; align-items:center; gap:7px; color:var(--text-3); font:600 9px var(--font-mono); letter-spacing:.09em; text-transform:uppercase; }
+  .theme-control select { max-width:116px; padding:6px 8px; font-size:11px; border-radius:8px; background:var(--panel-2); border-color:var(--border-2); }
+  .theme-control select:hover { border-color:var(--accent); }
+  @keyframes workspace-enter { from { opacity:0; transform:translateY(9px) scale(.995); filter:blur(3px); } to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); } }
+  @keyframes metric-arrive { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+  [data-theme="obsidian"] { --bg:#090b12; --bg-2:#111522; --panel:#171c2a; --panel-2:#222a3d; --panel-3:#303a52; --accent:#b7a2ff; --accent-dim:#493b79; --accent-glow:rgba(183,162,255,.16); --blue:#91a9ff; --c-day:#345b91; --c-night:#684c9b; }
+  [data-theme="amethyst"] { --bg:#100b1b; --bg-2:#1a1028; --panel:#211632; --panel-2:#302044; --panel-3:#422b5b; --accent:#e1a6ff; --accent-dim:#713f86; --accent-glow:rgba(225,166,255,.16); --blue:#9c9bff; --c-day:#3f5c9b; --c-night:#754b9c; }
+  [data-theme="ember"] { --bg:#160d0b; --bg-2:#21120f; --panel:#2a1916; --panel-2:#3a211b; --panel-3:#4b2c22; --accent:#ffbd83; --accent-dim:#8a482b; --accent-glow:rgba(255,189,131,.16); --blue:#e6a17b; --c-day:#8a552e; --c-night:#70406e; --c-leave:#81402d; }
+  [data-theme="arctic"] { --bg:#07131c; --bg-2:#0c202d; --panel:#102735; --panel-2:#183748; --panel-3:#24485b; --accent:#79dcff; --accent-dim:#155b75; --accent-glow:rgba(121,220,255,.16); --blue:#9abfff; --c-day:#285f91; --c-night:#4d5798; }
+  @media (max-width: 700px) {
+    .theme-control { gap:4px; }
+    .theme-control > span { display:none; }
+    .theme-control select { max-width:94px; }
+    header { gap:6px; }
+    .header-right { gap:6px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel, .metric-card, .nav-btn, button, .tab-pane { animation:none !important; transition:none !important; }
+    .metric-card:hover { transform:none; }
+  }
+
 </style>
 </head>
 <body>
@@ -950,6 +1048,15 @@
         <span>Signed in as <b id="meName"></b></span>
       </div>
       <span id="meRolePill" class="role-pill"></span>
+      <label class="theme-control" for="themeSelect"><span>Theme</span>
+        <select id="themeSelect" aria-label="Choose interface theme">
+          <option value="aurora">Aurora</option>
+          <option value="obsidian">Obsidian</option>
+          <option value="amethyst">Amethyst</option>
+          <option value="ember">Ember</option>
+          <option value="arctic">Arctic</option>
+        </select>
+      </label>
       <button id="logoutBtn" class="ghost">Sign out</button>
     </div>
   </header>
