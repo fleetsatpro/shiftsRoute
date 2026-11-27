@@ -1212,6 +1212,94 @@ export default {
         return json({ schedule_id: scheduleId, month, department_id, assignments, assignmentMeta, totals, warnings }, { status: 201 });
       }
 
+      if (pathname === '/api/workforce/my-roster' && request.method === 'GET') {
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'A valid YYYY-MM month is required' }, { status: 400 });
+        const myShifts = Object.create(null);
+        const myShiftDetails = Object.create(null);
+        const coworkersByDate = Object.create(null);
+        let scheduleStatus = null;
+
+        const homeSchedule = await env.DB.prepare(
+          'SELECT id,status FROM schedules WHERE month=? AND department_id=? ORDER BY generated_at DESC LIMIT 1'
+        ).bind(month, me.department_id).first();
+        if (homeSchedule) {
+          scheduleStatus = homeSchedule.status;
+          const { results: homeRows } = await env.DB.prepare(
+            'SELECT sa.staff_id,st.name AS staff_name,sa.date,sa.shift_code,sa.coverage_department_id,sa.coverage_shift_code ' +
+            'FROM shift_assignments sa JOIN staff st ON st.id=sa.staff_id WHERE sa.schedule_id=? ORDER BY sa.date,st.name'
+          ).bind(homeSchedule.id).all();
+          for (const row of homeRows) {
+            if (row.staff_id !== me.id) continue;
+            myShifts[row.date] = row.shift_code;
+            myShiftDetails[row.date] = {
+              shift_code: row.shift_code,
+              coverage_department_id: row.coverage_department_id || null,
+              coverage_shift_code: row.coverage_shift_code || null,
+            };
+          }
+          for (const [date, detail] of Object.entries(myShiftDetails)) {
+            if (detail.coverage_department_id) continue;
+            const coveredCode = detail.coverage_shift_code || detail.shift_code;
+            if (!['D','N','DC','NC','T','FSA'].includes(detail.shift_code)) continue;
+            coworkersByDate[date] = homeRows.filter(row => row.date === date && row.staff_id !== me.id
+              && (row.coverage_shift_code || row.shift_code) === coveredCode).map(row => row.staff_name);
+          }
+        }
+
+        const { results: leaveRows } = await env.DB.prepare(
+          "SELECT date,leave_type FROM leave_requests WHERE staff_id=? AND status='approved' AND date LIKE ?"
+        ).bind(me.id, month + '-%').all();
+        for (const row of leaveRows) {
+          if (!myShifts[row.date] || myShifts[row.date] === 'O') {
+            myShifts[row.date] = row.leave_type || 'L';
+            myShiftDetails[row.date] = { shift_code: row.leave_type || 'L', coverage_department_id: null, coverage_shift_code: null };
+          }
+        }
+
+        const { results: trainingRows } = await env.DB.prepare(
+          "SELECT date,marker_code FROM workforce_staff_markers WHERE staff_id=? AND status='approved' AND date LIKE ?"
+        ).bind(me.id, month + '-%').all();
+        for (const row of trainingRows) {
+          if (!myShifts[row.date] || myShifts[row.date] === 'O') {
+            myShifts[row.date] = row.marker_code;
+            myShiftDetails[row.date] = { shift_code: row.marker_code, coverage_department_id: null, coverage_shift_code: null };
+          }
+        }
+
+        const { results: reliefRows } = await env.DB.prepare(
+          "SELECT r.*,d.name AS target_department_name FROM workforce_relief_assignments r JOIN departments d ON d.id=r.target_department_id WHERE r.staff_id=? AND r.status='approved' AND r.duty_date LIKE ? ORDER BY r.duty_date"
+        ).bind(me.id, month + '-%').all();
+        for (const relief of reliefRows) {
+          myShifts[relief.duty_date] = relief.display_code;
+          myShiftDetails[relief.duty_date] = {
+            shift_code: relief.display_code,
+            coverage_department_id: relief.target_department_id,
+            coverage_department_name: relief.target_department_name,
+            coverage_shift_code: relief.shift_code,
+          };
+          const targetSchedule = await env.DB.prepare(
+            'SELECT id FROM schedules WHERE month=? AND department_id=? ORDER BY generated_at DESC LIMIT 1'
+          ).bind(month, relief.target_department_id).first();
+          if (targetSchedule) {
+            const { results: targetRows } = await env.DB.prepare(
+              'SELECT sa.staff_id,st.name AS staff_name,sa.date,sa.shift_code,sa.coverage_department_id,sa.coverage_shift_code ' +
+              'FROM shift_assignments sa JOIN staff st ON st.id=sa.staff_id WHERE sa.schedule_id=? AND sa.date=?'
+            ).bind(targetSchedule.id, relief.duty_date).all();
+            coworkersByDate[relief.duty_date] = targetRows.filter(row => row.staff_id !== me.id
+              && (row.coverage_department_id === relief.target_department_id || !row.coverage_department_id)
+              && (row.coverage_shift_code || row.shift_code) === relief.shift_code).map(row => row.staff_name);
+          } else {
+            coworkersByDate[relief.duty_date] = [];
+          }
+        }
+
+        return json({
+          month, status: scheduleStatus, department_id: me.department_id,
+          my_shifts: myShifts, my_shift_details: myShiftDetails, coworkers_by_date: coworkersByDate,
+        });
+      }
+
       // ── List schedules (BUG FIX: now supports ?department= filter) ────
       if (pathname === '/api/schedules' && request.method === 'GET') {
         const month = url.searchParams.get('month');
