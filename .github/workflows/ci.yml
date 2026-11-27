@@ -106,15 +106,15 @@ jobs:
       cancel-in-progress: true
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: 5e24ad96b49005e1d1d841f0ec87b02a
     steps:
       - name: Check Cloudflare preview credentials
         id: credentials
         shell: bash
         run: |
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Cloudflare Preview skipped::Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as repository Actions secrets to enable live Worker and D1 browser tests."
+            echo "::notice title=Cloudflare Preview skipped::Add CLOUDFLARE_API_TOKEN as a repository Actions secret to enable live Worker and D1 browser tests."
           else
             echo "available=true" >> "$GITHUB_OUTPUT"
           fi

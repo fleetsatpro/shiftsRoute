@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const previewPin = process.env.E2E_DEMO_PIN || '';
 
-test.describe('real Cloudflare Worker + isolated D1 Preview', () => {
+test.describe('real Worker + isolated D1 browser acceptance', () => {
   test.skip(!process.env.E2E_BASE_URL, 'Requires the deployed Cloudflare Worker Preview URL.');
 
   test('serves synthetic D1 data, authenticates a real session, and renders desktop/mobile workspaces', async ({ page }, testInfo) => {
