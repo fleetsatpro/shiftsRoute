@@ -117,6 +117,13 @@ export function generateSchedule({
   }
   const nightRestRule = (department.night_rest_rule ?? 1) === 1;
 
+  function canAssign(person, day, shiftCode) {
+    if (state[person.id][day] !== null) return false;
+    const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
+    if (nightRestRule && shiftCode === dayCode && prevType === 'night') return false;
+    return consecutiveWork < (person.max_consecutive_days ?? 5);
+  }
+
   function canPlaceFixed(person, day, value, date) {
     const code = value.shift_code || value.code;
     if (typeof code !== 'string' || !['D','N','DC','NC','O','T','FSA'].includes(code)) return false;
@@ -216,7 +223,7 @@ export function generateSchedule({
         const qualified = isNight
           ? (person.can_night !== 0 || person.night_exception_dates?.includes(date))
           : person.can_day !== 0;
-        return qualified && state[person.id][day] === null;
+        return qualified && canAssign(person, day, shiftCode);
       }).sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day) || a.id.localeCompare(b.id));
 
       const alreadyAssigned = coverageCount(day, shiftCode);

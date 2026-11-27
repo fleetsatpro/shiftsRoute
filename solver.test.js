@@ -238,3 +238,34 @@ test('trainee day marker obeys night-to-day recovery across the month boundary',
   assert.equal(result.assignments.trainee['2026-12-01'], 'O');
   assert.ok(result.warnings.some(warning => warning.includes('fixed T') && warning.includes('rest policy')));
 });
+
+
+test('allocator skips a night-to-day-ineligible first candidate and fills with a compliant colleague', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-night', name: 'After night', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    priorFinalState: { 'a-night': { lastShift: 'night', consecutiveWork: 1 } },
+  });
+  assert.equal(result.assignments['a-night']['2026-12-01'], 'O');
+  assert.equal(result.assignments['b-ready']['2026-12-01'], 'D');
+  assert.ok(!result.warnings.some(warning => warning.includes('only 0/1 available')));
+});
+
+test('allocator excludes a worker already at the consecutive-work maximum before computing coverage', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'SCE', day_code: 'DC', night_code: 'NC', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-maxed', name: 'Maxed worker', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    priorFinalState: { 'a-maxed': { lastShift: 'day', consecutiveWork: 5 } },
+  });
+  assert.equal(result.assignments['a-maxed']['2026-12-01'], 'O');
+  assert.equal(result.assignments['b-ready']['2026-12-01'], 'DC');
+  assert.ok(!result.warnings.some(warning => warning.includes('only 0/1 available')));
+});
