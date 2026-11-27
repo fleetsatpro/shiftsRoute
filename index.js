@@ -288,7 +288,14 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
         const body = await request.json();
-        if (!body.staff_id || !body.date) return json({ error: 'staff_id and date required' }, { status: 400 });
+        if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)) {
+          return json({ error: 'A valid staff_id and YYYY-MM-DD date are required' }, { status: 400 });
+        }
+        if (body.status !== undefined && !['approved', 'pending'].includes(body.status)) {
+          return json({ error: 'status must be approved or pending' }, { status: 400 });
+        }
+        const target = await env.DB.prepare('SELECT id FROM staff WHERE id = ? AND active = 1').bind(body.staff_id).first();
+        if (!target) return json({ error: 'Active staff account not found' }, { status: 404 });
         const id = uuid();
         await env.DB.prepare(
           'INSERT INTO leave_requests (id, staff_id, date, status) VALUES (?, ?, ?, ?) ' +
@@ -330,8 +337,31 @@ export default {
         const body = await request.json();
         const { to_staff_id, date, shift_code } = body;
         // from_staff_id is always the requester
-        if (!to_staff_id || !date || !shift_code) {
-          return json({ error: 'to_staff_id, date, and shift_code required' }, { status: 400 });
+        if (typeof to_staff_id !== 'string' || to_staff_id === me.id || !isValidCalendarDate(date)) {
+          return json({ error: 'A different recipient and valid YYYY-MM-DD date are required' }, { status: 400 });
+        }
+        const department = await env.DB.prepare('SELECT day_code, night_code FROM departments WHERE id = ?')
+          .bind(me.department_id).first();
+        if (!department || ![department.day_code, department.night_code].includes(shift_code)) {
+          return json({ error: 'The requested shift code is not valid for your department' }, { status: 400 });
+        }
+        const recipient = await env.DB.prepare(
+          'SELECT id FROM staff WHERE id = ? AND active = 1 AND department_id = ?'
+        ).bind(to_staff_id, me.department_id).first();
+        if (!recipient) return json({ error: 'Recipient must be active in your department' }, { status: 404 });
+        const draft = await env.DB.prepare(
+          "SELECT id FROM schedules WHERE month = ? AND department_id = ? AND status = 'draft' ORDER BY generated_at DESC LIMIT 1"
+        ).bind(date.slice(0, 7), me.department_id).first();
+        if (!draft) return json({ error: 'No editable draft schedule exists for this date' }, { status: 409 });
+        const [fromAssignment, toAssignment] = await Promise.all([
+          env.DB.prepare('SELECT shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?')
+            .bind(draft.id, me.id, date).first(),
+          env.DB.prepare('SELECT shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?')
+            .bind(draft.id, to_staff_id, date).first(),
+        ]);
+        if (!fromAssignment || !toAssignment || fromAssignment.shift_code !== shift_code
+          || ![department.day_code, department.night_code, 'O'].includes(toAssignment.shift_code)) {
+          return json({ error: 'The selected staff assignments are not eligible for this swap' }, { status: 409 });
         }
         const id = uuid();
         await env.DB.prepare(
@@ -426,8 +456,8 @@ export default {
 
         const body = await request.json();
         const { month, department_id } = body;
-        if (!month || !department_id) {
-          return json({ error: 'month and department_id are required' }, { status: 400 });
+        if (!isValidMonth(month) || typeof department_id !== 'string' || !department_id) {
+          return json({ error: 'A valid YYYY-MM month and department_id are required' }, { status: 400 });
         }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
@@ -585,8 +615,8 @@ export default {
         const body = await request.json();
         const { staff_id, date, shift_code } = body;
 
-        if (!staff_id || !date || !shift_code) {
-          return json({ error: 'staff_id, date, and shift_code required' }, { status: 400 });
+        if (typeof staff_id !== 'string' || !isValidCalendarDate(date) || !shift_code) {
+          return json({ error: 'staff_id, valid YYYY-MM-DD date, and shift_code required' }, { status: 400 });
         }
 
         const validCodes = ['D', 'N', 'DC', 'NC', 'O', 'L'];
