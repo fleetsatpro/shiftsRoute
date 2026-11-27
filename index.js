@@ -436,6 +436,13 @@ export default {
           const binds = [];
           if (body.name) { updates.push('name = ?'); binds.push(body.name); }
           if (body.role && ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role)) {
+            const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+            const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target?.role || 'staff').first();
+            const nextLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(body.role).first();
+            const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+            if (me.role !== 'admin' && ((targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0) || (nextLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0))) {
+              return json({ error: 'You cannot change an account at or above your authority level' }, { status: 403 });
+            }
             updates.push('role = ?'); binds.push(body.role);
           }
           if (updates.length === 0) return json({ error: 'Nothing to update' }, { status: 400 });
