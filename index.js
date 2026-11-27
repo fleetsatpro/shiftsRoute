@@ -379,16 +379,30 @@ export default {
           if (!fromAssignment || !toAssignment || fromAssignment.shift_code !== swap.shift_code) {
             return json({ error: 'The requested assignments have changed; refresh the roster and submit a new request' }, { status: 409 });
           }
+          // Re-check draft state, request state and the exact pre-swap values in
+          // the write transaction. A schedule can be published after the reads
+          // above; no approval may mutate a published schedule.
           await env.DB.batch([
             env.DB.prepare(
               `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
-               WHERE id = ? AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
-            ).bind(toAssignment.shift_code, fromAssignment.id, swapId),
+               WHERE id = ? AND schedule_id = ? AND shift_code = ?
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(toAssignment.shift_code, fromAssignment.id, schedule.id, fromAssignment.shift_code, schedule.id, swapId),
             env.DB.prepare(
               `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
-               WHERE id = ? AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
-            ).bind(fromAssignment.shift_code, toAssignment.id, swapId),
-            env.DB.prepare("UPDATE swap_requests SET status = 'approved' WHERE id = ? AND status = 'pending'").bind(swapId),
+               WHERE id = ? AND schedule_id = ? AND shift_code = ?
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(fromAssignment.shift_code, toAssignment.id, schedule.id, toAssignment.shift_code, schedule.id, swapId),
+            env.DB.prepare(
+              `UPDATE swap_requests SET status = 'approved'
+               WHERE id = ? AND status = 'pending'
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM shift_assignments WHERE id = ? AND schedule_id = ? AND shift_code = ?)
+                 AND EXISTS (SELECT 1 FROM shift_assignments WHERE id = ? AND schedule_id = ? AND shift_code = ?)`
+            ).bind(swapId, schedule.id, fromAssignment.id, schedule.id, toAssignment.shift_code,
+              toAssignment.id, schedule.id, fromAssignment.shift_code),
           ]);
           const confirmed = await env.DB.prepare("SELECT status FROM swap_requests WHERE id = ?").bind(swapId).first();
           if (confirmed?.status !== 'approved') return json({ error: 'Swap could not be committed; reload and retry' }, { status: 409 });
@@ -718,7 +732,26 @@ async function getPriorFinalState(db, month, departmentId, staffRows, dept) {
   return priorFinalState;
 }
 
-function buildCsv(assignments, month) {
+export function isValidCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+export function isValidMonth(value) {
+  return typeof value === 'string' && /^\\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
+function csvCell(value) {
+  let text = String(value ?? '');
+  // Spreadsheet applications may execute cells beginning with formula
+  // markers. Prefix dangerous user-controlled values before CSV quoting.
+  if (/^[\\t\\r ]*[=+\\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+export function buildCsv(assignments, month) {
   const dayCount = daysInMonth(month);
   const byStaff = {};
   for (const row of assignments) {
@@ -729,12 +762,12 @@ function buildCsv(assignments, month) {
   }
 
   const header = ['Department', 'Staff', ...Array.from({ length: dayCount }, (_, i) => dateStr(month, i + 1))];
-  const lines = [header.join(',')];
+  const lines = [header.map(csvCell).join(',')];
   for (const staffId of Object.keys(byStaff)) {
     const { name, department_id, days } = byStaff[staffId];
     const row = [department_id, name];
     for (let d = 1; d <= dayCount; d++) row.push(days[dateStr(month, d)] || '');
-    lines.push(row.join(','));
+    lines.push(row.map(csvCell).join(','));
   }
-  return lines.join('\n');
+  return lines.join('\\n');
 }
