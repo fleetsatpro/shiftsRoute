@@ -113,6 +113,9 @@ VALUES
   ('cate', 'Cate', 'ISOC', 1, 'staff', 0),
   ('oliera', 'Oliera', 'ISOC', 1, 'staff', 0);
 
+INSERT OR IGNORE INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from)
+SELECT id, 'allowed', 5, 11, '2026-11-27' FROM staff WHERE id IN ('mukasa','mercy','cate','oliera');
+
 -- Duty Ops Managers can provide day coverage to either operational team.
 INSERT OR IGNORE INTO staff_department_qualifications
   (staff_id, department_id, can_day, can_night, priority, effective_from, approval_note)
