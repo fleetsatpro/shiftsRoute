@@ -263,7 +263,7 @@ async function loadStaffTable() {
     else if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
     if (s.id !== state.me.id) actions.push(`<button type="button" class="danger" data-action="deactivate" data-staff-id="${id}" data-staff-name="${name}">Deactivate</button>`);
     return `
-      <tr>
+      <tr data-search="${escHtml([s.name, s.department_id, s.role].join(" ").toLowerCase())}">
         <td>${name}</td>
         <td>${escHtml(s.department_id)}</td>
         <td><span class="role-pill ${s.role === 'staff' ? 'staff-role' : ''}">${escHtml(s.role)}</span></td>
@@ -271,6 +271,14 @@ async function loadStaffTable() {
         <td class="staff-actions">${actions.join('')}</td>
       </tr>`;
   }).join('');
+  applyStaffSearch();
+}
+
+function applyStaffSearch() {
+  const query = (el('staffSearch')?.value || '').trim().toLowerCase();
+  qsa('#staffTableBody tr').forEach(row => {
+    row.classList.toggle('hidden', query !== '' && !row.dataset.search?.includes(query));
+  });
 }
 
 import { escHtml, safeShiftCode, safeStatus } from './ui-utils.js';
@@ -688,8 +696,30 @@ function renderLeaveList() {
   `).join('') || '<span class="muted">No leave on file for this month.</span>';
 }
 
+function renderScheduleMetrics() {
+  const panel = el('teamMetrics');
+  const rows = (state.schedule?.assignments || []).filter(row => row.department_id === state.department);
+  if (!rows.length) {
+    panel.classList.add('hidden');
+    return;
+  }
+  const codes = DEPT_CODES[state.department];
+  const staff = new Set(rows.map(row => row.staff_id));
+  const day = rows.filter(row => row.shift_code === codes.day).length;
+  const night = rows.filter(row => row.shift_code === codes.night).length;
+  const leave = rows.filter(row => row.shift_code === 'L').length;
+  const overrides = rows.filter(row => !!row.is_manual_override).length;
+  el('metricStaff').textContent = staff.size.toLocaleString();
+  el('metricDay').textContent = day.toLocaleString();
+  el('metricNight').textContent = night.toLocaleString();
+  el('metricLeave').textContent = leave.toLocaleString();
+  el('metricOverrides').textContent = overrides.toLocaleString();
+  panel.classList.remove('hidden');
+}
+
 // ── Team grid render ───────────────────────────────────────
 function renderGrid() {
+  renderScheduleMetrics();
   const box = el('warningsBox');
   box.replaceChildren();
   if (typeof state.schedule?.notes === 'string' && state.schedule.notes.startsWith('Warnings:')) {
@@ -971,6 +1001,9 @@ function init() {
     const button = e.target.closest('[data-action="remove-leave"]');
     if (button) removeLeave(button.dataset.leaveId);
   });
+
+  // Staff directory search filters the currently loaded department roster.
+  el('staffSearch').addEventListener('input', applyStaffSearch);
 
   // Staff modal
   el('addStaffBtn').addEventListener('click', () => openModal('addStaffModal'));
