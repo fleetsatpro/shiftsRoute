@@ -91,3 +91,21 @@ test('solver honors configurable maximum consecutive work days', () => {
     assert.ok(streak <= 2, 'day-only support exceeds configured work streak');
   }
 });
+
+
+test('exception-only night eligibility is limited to explicitly approved dates', () => {
+  const staff = [
+    { id: 'wayne', can_day: 1, can_night: 0, night_exception_dates: ['2026-07-01'] },
+    { id: 'b', can_day: 1, can_night: 1 },
+    { id: 'c', can_day: 1, can_night: 1 },
+    { id: 'd', can_day: 1, can_night: 1 },
+  ];
+  const result = generateSchedule({
+    month: '2026-07',
+    department: { ...dept, day_min: 1, day_max: 1, night_min: 1, night_max: 1 },
+    staff,
+    leaveByStaff: {},
+  });
+  const nights = Object.entries(result.assignments.wayne).filter(([, code]) => code === 'N').map(([date]) => date);
+  assert.ok(nights.every(date => date === '2026-07-01'));
+});
