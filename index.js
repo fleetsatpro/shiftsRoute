@@ -231,7 +231,7 @@ export default {
           return { ok: false, status: 400, error: 'Use the target desk shift code; FSA is reserved for an approved Field Supervisor deployment' };
         }
         const targetDepartment = await env.DB.prepare(
-          'SELECT id, day_code, night_code, day_min, night_min FROM departments WHERE id = ? AND operational_team = 1'
+          'SELECT id, day_code, night_code, day_min, night_min, night_rest_rule FROM departments WHERE id = ? AND operational_team = 1'
         ).bind(target_department_id).first();
         if (!targetDepartment || ![targetDepartment.day_code, targetDepartment.night_code].includes(shift_code)) {
           return { ok: false, status: 400, error: 'The selected shift code does not belong to the target desk' };
@@ -308,6 +308,58 @@ export default {
             return { ok: false, status: 409, error: 'The employee is already rostered for another assignment on this date; resolve the existing roster before approving relief' };
           }
         }
+        // Relief is one real workday across the whole employee, not a separate
+        // allocation universe for each desk. Inspect the latest schedules in
+        // both teams around the proposed date before allowing a deployment.
+        const [personPolicy, neighbouringAssignments] = await Promise.all([
+          env.DB.prepare('SELECT max_consecutive_days, min_rest_hours FROM staff_shift_policies WHERE staff_id=?')
+            .bind(staff_id).first(),
+          env.DB.prepare(
+            'SELECT DISTINCT sa.date,sa.shift_code,sa.coverage_shift_code,sc.department_id ' +
+            'FROM shift_assignments sa JOIN schedules sc ON sc.id=sa.schedule_id ' +
+            "WHERE sa.staff_id=? AND sa.date BETWEEN date(?,'-7 days') AND date(?,'+1 day') " +
+            "AND sc.id=(SELECT latest.id FROM schedules latest WHERE latest.month=sc.month " +
+            'AND latest.department_id=sc.department_id ORDER BY latest.generated_at DESC LIMIT 1) ' +
+            "AND sa.shift_code NOT IN ('O','L','PL','ML','SL') ORDER BY sa.date,sc.department_id"
+          ).bind(staff_id, duty_date, duty_date).all(),
+        ]);
+        const policyMax = Number(personPolicy?.max_consecutive_days || 5);
+        const adjacentWorkDates = new Set((neighbouringAssignments.results || []).map(row => row.date));
+        adjacentWorkDates.add(duty_date);
+        const previousDay = new Date(Date.parse(duty_date + 'T00:00:00Z') - 86400000);
+        const nextDay = new Date(Date.parse(duty_date + 'T00:00:00Z') + 86400000);
+        let beforeStreak = 0;
+        for (let offset = 1; offset <= 7; offset++) {
+          const date = new Date(Date.parse(duty_date + 'T00:00:00Z') - offset * 86400000).toISOString().slice(0,10);
+          if (!adjacentWorkDates.has(date)) break;
+          beforeStreak++;
+        }
+        let afterStreak = 0;
+        for (let offset = 1; offset <= 7; offset++) {
+          const date = new Date(Date.parse(duty_date + 'T00:00:00Z') + offset * 86400000).toISOString().slice(0,10);
+          if (!adjacentWorkDates.has(date)) break;
+          afterStreak++;
+        }
+        if (beforeStreak + 1 + afterStreak > policyMax) {
+          return { ok: false, status: 409, error: 'This deployment would exceed the employee’s maximum consecutive work-day limit across both desks' };
+        }
+        if (targetDepartment.night_rest_rule === 1) {
+          const previousCalendarDate = previousDay.toISOString().slice(0,10);
+          const nextCalendarDate = nextDay.toISOString().slice(0,10);
+          const yesterdayCodes = (neighbouringAssignments.results || [])
+            .filter(row => row.date === previousCalendarDate)
+            .map(row => row.coverage_shift_code || row.shift_code);
+          const tomorrowCodes = (neighbouringAssignments.results || [])
+            .filter(row => row.date === nextCalendarDate)
+            .map(row => row.coverage_shift_code || row.shift_code);
+          const previousWasNight = yesterdayCodes.some(code => ['N','NC'].includes(code));
+          const nextIsDay = tomorrowCodes.some(code => ['D','DC'].includes(code));
+          if ((shift_code === targetDepartment.day_code && previousWasNight)
+            || (shift_code === targetDepartment.night_code && nextIsDay)) {
+            return { ok: false, status: 409, error: 'This deployment would violate the configured night-to-day recovery rule across desks' };
+          }
+        }
+
         let shortage = null;
         if (verifyShortage) {
           const baseline = await env.DB.prepare(
