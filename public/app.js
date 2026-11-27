@@ -361,10 +361,15 @@ async function removeLeave(id) {
 }
 
 async function onDeptOrMonthChange() {
+  const nextMonth = el('month').value;
+  if (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(nextMonth)) {
+    toast('Choose a valid month.', 'warning');
+    return;
+  }
   state.department = el('dept').value;
-  state.month      = el('month').value;
+  state.month = nextMonth;
   updateDeptBadge();
-  showLoading();
+  showLoading('Loading roster…');
   try {
     await loadStaff();
     await loadLeave();
@@ -372,6 +377,8 @@ async function onDeptOrMonthChange() {
     await loadLatest();
     await loadSwaps();
     if (state.me.role === 'admin') await loadStaffTable();
+  } catch (err) {
+    toast('Could not refresh the selected month: ' + err.message, 'error', 5500);
   } finally {
     hideLoading();
   }
@@ -466,7 +473,7 @@ function openNewSwap() {
   // Populate swap-to staff list (all dept staff except self)
   const others = state.staff.filter(s => s.id !== state.me.id);
   el('swapToStaff').innerHTML = others.map(s =>
-    `<option value="${s.id}">${escHtml(s.name)}</option>`
+    `<option value="${escHtml(s.id)}">${escHtml(s.name)}</option>`
   ).join('');
   // Populate shift codes for this dept
   const codes = DEPT_CODES[state.department];
@@ -538,9 +545,9 @@ function setTab(tab) {
   const pane = el(`tab-${tab}`);
   if (pane) pane.classList.remove('hidden');
   qsa('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  // Lazy-load swaps tab
-  if (tab === 'swaps') loadSwaps();
-  if (tab === 'staff') loadStaffTable();
+  // Lazy-load tab data and surface failures instead of silently leaving stale content.
+  if (tab === 'swaps') loadSwaps().catch(err => toast('Could not load swap requests: ' + err.message, 'error'));
+  if (tab === 'staff') loadStaffTable().catch(err => toast('Could not load staff: ' + err.message, 'error'));
 }
 
 // ── Render ────────────────────────────────────────────────
@@ -622,7 +629,7 @@ function renderMyLeave() {
     return;
   }
   el2.innerHTML = state.myLeave.map(l =>
-    `<span class="leave-date-chip">✦ ${friendlyDate(l.date)}</span>`
+    `<span class="leave-date-chip">${escHtml(friendlyDate(l.date))}</span>`
   ).join('');
 }
 
@@ -666,7 +673,7 @@ function renderSwaps() {
 function renderLeaveList() {
   const byStaff = new Set(state.staff.map(s => s.id));
   const filtered = state.leave.filter(l => byStaff.has(l.staff_id));
-  const staffById = Object.fromEntries(state.staff.map(s => [s.id, s.name]));
+  const staffById = Object.assign(Object.create(null), Object.fromEntries(state.staff.map(s => [s.id, s.name])));
   el('leaveList').innerHTML = filtered.map(l => `
     <span class="leave-chip">
       <b>${escHtml(staffById[l.staff_id] || l.staff_id)}</b> · ${escHtml(l.date)}
@@ -903,6 +910,34 @@ function init() {
 
   // Leave
   el('addLeaveBtn').addEventListener('click', addLeave);
+
+  // Delegated actions: no user-controlled values are interpolated into executable HTML.
+  el('staffTableBody').addEventListener('click', e => {
+    const button = e.target.closest('[data-action]');
+    if (!button) return;
+    const { action, staffId, staffName } = button.dataset;
+    const handlers = {
+      'reset-pin': resetPin,
+      'make-admin': makeAdmin,
+      'make-staff': makeStaff,
+      deactivate: deactivateStaff,
+    };
+    if (handlers[action]) handlers[action](staffId, staffName);
+  });
+  el('swapList').addEventListener('click', e => {
+    const button = e.target.closest('[data-action][data-swap-id]');
+    if (!button) return;
+    const handlers = {
+      'approve-swap': approveSwap,
+      'reject-swap': rejectSwap,
+      'cancel-swap': cancelSwap,
+    };
+    if (handlers[button.dataset.action]) handlers[button.dataset.action](button.dataset.swapId);
+  });
+  el('leaveList').addEventListener('click', e => {
+    const button = e.target.closest('[data-action="remove-leave"]');
+    if (button) removeLeave(button.dataset.leaveId);
+  });
 
   // Staff modal
   el('addStaffBtn').addEventListener('click', () => openModal('addStaffModal'));
