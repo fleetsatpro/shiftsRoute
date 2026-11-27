@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCsv, isValidCalendarDate, isValidMonth } from './index.js';
+import { buildCsv, isValidCalendarDate, isValidMonth } from './helpers.js';
 
 test('calendar validation rejects impossible and malformed dates/months', () => {
   assert.equal(isValidCalendarDate('2026-11-27'), true);
