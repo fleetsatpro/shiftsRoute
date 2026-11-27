@@ -1134,6 +1134,7 @@ function renderGrid() {
       borrowed: isReliefTargetRow && row.department_id !== state.department,
       outgoing: !!row.coverage_department_id && row.coverage_department_id !== state.department,
       editable: isAdmin && isHomeRow && row.role !== 'duty_ops_manager' && !row.coverage_department_id
+        && CYCLE_ORDER[state.department]?.includes(row.shift_code)
         && ['D','N','DC','NC','O','L'].includes(row.shift_code),
     };
   }
