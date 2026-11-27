@@ -21,7 +21,7 @@ test('PIN hashes are salted, deterministic for a supplied salt, and not plain PI
   assert.notEqual((await hashPin('483921', first.salt)).hash, first.hash);
 });
 
-test('constant-time equality helper rejects mismatches and type confusion', () => {
+test('PIN derivation stays compatible with Workers 100k per-operation WebCrypto limit', async () => {\n  const salt = '00112233445566778899aabbccddeeff';\n  const first = await hashPin('483920', salt);\n  assert.equal(first.salt, salt);\n  assert.match(first.hash, /^[a-f0-9]{64}$/);\n  assert.deepEqual(await hashPin('483920', salt), first);\n  assert.notEqual((await hashPin('483921', salt)).hash, first.hash);\n});\n\ntest('constant-time equality helper rejects mismatches and type confusion', () => {
   assert.equal(safeEqual('abcdef', 'abcdef'), true);
   assert.equal(safeEqual('abcdef', 'abcdeg'), false);
   assert.equal(safeEqual('abcdef', 'abc'), false);
