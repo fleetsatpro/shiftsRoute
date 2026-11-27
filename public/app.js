@@ -686,15 +686,28 @@ async function loadDutyWorkspace() {
     <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
     ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
   const reliefByStaff = new Map();
-  for (const qualification of overview.qualifications) {
-    if (qualification.relief_only && overview.staff.some(person => person.id === qualification.staff_id && person.active)
-      && !reliefByStaff.has(qualification.staff_id)) reliefByStaff.set(qualification.staff_id, qualification);
-  }
-  const eligibleRelief = [...reliefByStaff.values()];
   const reliefStaff = new Map(overview.staff.map(person => [person.id, person]));
-  el('dutyReliefStaff').innerHTML = eligibleRelief.map(q => {
-    const person = reliefStaff.get(q.staff_id);
-    return person ? `<option value="${escHtml(person.id)}" data-department="${escHtml(person.department_id)}" data-designation="${escHtml(q.designation || '')}" data-relief-capable="${q.relief_capable ? '1' : '0'}">${escHtml(person.name)} · ${escHtml(person.department_id)}${q.designation ? ' · ' + escHtml(q.designation) : ''}</option>` : '';
+  for (const qualification of overview.qualifications) {
+    const person = reliefStaff.get(qualification.staff_id);
+    if (!qualification.relief_only || !person?.active) continue;
+    if (!reliefByStaff.has(qualification.staff_id)) {
+      reliefByStaff.set(qualification.staff_id, {
+        person,
+        qualifications: [],
+      });
+    }
+    reliefByStaff.get(qualification.staff_id).qualifications.push(qualification);
+  }
+  el('dutyReliefStaff').innerHTML = [...reliefByStaff.values()].map(entry => {
+    const targets = [...new Set(entry.qualifications.map(item => item.department_id))];
+    const fieldSupervisor = entry.qualifications.some(item =>
+      item.designation === 'Field Supervisor' && item.relief_capable === 1
+    );
+    return `<option value="${escHtml(entry.person.id)}"
+      data-department="${escHtml(entry.person.department_id)}"
+      data-targets="${escHtml(targets.join(','))}"
+      data-designation="${fieldSupervisor ? 'Field Supervisor' : ''}"
+      data-relief-capable="${fieldSupervisor ? '1' : '0'}">${escHtml(entry.person.name)} · ${escHtml(entry.person.department_id)}${fieldSupervisor ? ' · Field Supervisor' : ''}</option>`;
   }).join('');
   el('dutyReliefDept').innerHTML = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   updateReliefShiftOptions();
@@ -743,9 +756,24 @@ async function saveHrLeave(event) {
 function updateReliefShiftOptions() {
   const department = el('dutyReliefDept')?.value || 'ISOC';
   const select = el('dutyReliefShift');
-  if (!select) return;
+  const staffSelect = el('dutyReliefStaff');
+  if (!select || !staffSelect) return;
   const options = DEPT_CODES[department];
   select.innerHTML = `<option value="${options.day}">Day (${options.day})</option><option value="${options.night}">Night (${options.night})</option>`;
+
+  // Only offer employees who are effectively relief-qualified for the chosen
+  // receiving desk. The Worker still revalidates the authoritative D1 records.
+  const eligible = [];
+  for (const option of staffSelect.options) {
+    const targets = (option.dataset.targets || '').split(',').filter(Boolean);
+    option.hidden = !targets.includes(department);
+    if (!option.hidden) eligible.push(option);
+  }
+  if (!eligible.some(option => option.value === staffSelect.value)) {
+    staffSelect.value = eligible[0]?.value || '';
+  }
+  const submit = el('dutyReliefForm')?.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = eligible.length === 0;
 }
 
 async function submitReliefAssignment(event) {

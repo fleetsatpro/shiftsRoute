@@ -57,3 +57,13 @@ test('premium theme system exposes five palettes, persists selection, and respec
   assert.match(app, /localStorage\.setItem\('shiftsroute-theme'/);
   assert.match(app, /localStorage\.getItem\('shiftsroute-theme'/);
 });
+
+
+test('relief picker filters employees by their effective target-desk qualifications', async () => {
+  const app = await readFile(new URL('./public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /data-targets=/);
+  assert.match(app, /targets\.includes\(department\)/);
+  assert.match(app, /data-designation=/);
+  assert.match(app, /data-relief-capable=/);
+  assert.doesNotMatch(app, /staff_id === ['"]clinton-juma['"]/);
+});
