@@ -1363,6 +1363,19 @@
           </form>
           <div id="hrTraineeRows" class="leave-list"><p class="muted">No training assignments recorded for this month.</p></div>
         </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Staff rotation patterns</h2><span class="muted">Effective-dated · anchored cycle</span></div>
+          <p class="muted">Configure each employee’s actual desk rotation separately. Use the desk’s own codes and O for rest, for example D,D,N,N,O,O,O or DC,DC,NC,O,O,DC,DC. Approved leave, training and exceptional relief take precedence; the system will not silently rewrite the cycle to make headcount look balanced.</p>
+          <form id="hrRotationForm" class="leave-form">
+            <label class="ctrl-label" for="hrRotationStaff">Employee</label><select id="hrRotationStaff" required></select>
+            <label class="ctrl-label" for="hrRotationDept">Home desk</label><select id="hrRotationDept" required></select>
+            <label class="ctrl-label" for="hrRotationEffective">Effective from</label><input id="hrRotationEffective" type="date" required />
+            <label class="ctrl-label" for="hrRotationAnchor">Cycle anchor date</label><input id="hrRotationAnchor" type="date" required />
+            <label class="ctrl-label" for="hrRotationCodes">Rotation cycle (comma-separated)</label><input id="hrRotationCodes" minlength="1" maxlength="150" placeholder="D,D,N,N,O,O,O" required />
+            <button class="primary" type="submit">Save rotation pattern</button>
+          </form>
+          <div id="hrRotationRows" class="leave-list"><p class="muted">No effective rotation patterns configured.</p></div>
+        </div>
       </section>
 
       <!-- STAFF MANAGER tab (admin) -->
