@@ -261,3 +261,144 @@ CREATE INDEX IF NOT EXISTS idx_rotation_patterns_effective
   ON workforce_rotation_patterns(department_id,staff_id,effective_from,effective_to);
 ALTER TABLE shift_assignments ADD COLUMN assignment_source TEXT NOT NULL DEFAULT 'generated'
   CHECK (assignment_source IN ('generated','rotation','training','relief','field_supervisor','duty_ops','manual'));
+
+
+-- Close the API pre-check race: leave, training and relief are mutually exclusive
+-- at the D1 write boundary, not merely in UI validation.
+
+CREATE TRIGGER IF NOT EXISTS trg_leave_no_training_or_relief_insert
+BEFORE INSERT ON leave_requests
+WHEN NEW.status IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Leave conflicts with a pending or approved relief deployment') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Leave conflicts with an approved trainee assignment') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_leave_no_training_or_relief_update
+BEFORE UPDATE OF staff_id,date,status ON leave_requests
+WHEN NEW.status IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Leave conflicts with a pending or approved relief deployment') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Leave conflicts with an approved trainee assignment') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_training_no_leave_or_relief_insert
+BEFORE INSERT ON workforce_staff_markers
+WHEN NEW.status='approved' AND NEW.marker_code='T'
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM leave_requests l
+    WHERE l.staff_id=NEW.staff_id AND l.date=NEW.date
+      AND l.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Training conflicts with pending or approved leave') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Training conflicts with a pending or approved relief deployment') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM shift_assignments sa
+    JOIN schedules sc ON sc.id=sa.schedule_id
+    WHERE sa.staff_id=NEW.staff_id AND sa.date=NEW.date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND sc.id=(
+        SELECT latest.id FROM schedules latest
+        WHERE latest.month=sc.month AND latest.department_id=sc.department_id
+        ORDER BY latest.generated_at DESC LIMIT 1
+      )
+  ) THEN RAISE(ABORT, 'Training conflicts with an existing rostered assignment') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_training_no_leave_or_relief_update
+BEFORE UPDATE OF staff_id,date,status,marker_code ON workforce_staff_markers
+WHEN NEW.status='approved' AND NEW.marker_code='T'
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM leave_requests l
+    WHERE l.staff_id=NEW.staff_id AND l.date=NEW.date
+      AND l.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Training conflicts with pending or approved leave') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Training conflicts with a pending or approved relief deployment') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_relief_no_leave_or_training_insert
+BEFORE INSERT ON workforce_relief_assignments
+WHEN NEW.status IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM leave_requests l
+    WHERE l.staff_id=NEW.staff_id AND l.date=NEW.duty_date
+      AND l.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Relief conflicts with pending or approved leave') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.duty_date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Relief conflicts with an approved trainee assignment') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM shift_assignments sa
+    JOIN schedules sc ON sc.id=sa.schedule_id
+    WHERE sa.staff_id=NEW.staff_id AND sa.date=NEW.duty_date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND NOT (
+        sa.coverage_department_id=NEW.target_department_id
+        AND sa.coverage_shift_code=NEW.shift_code
+      )
+      AND sc.id=(
+        SELECT latest.id FROM schedules latest
+        WHERE latest.month=sc.month AND latest.department_id=sc.department_id
+        ORDER BY latest.generated_at DESC LIMIT 1
+      )
+  ) THEN RAISE(ABORT, 'Relief conflicts with an existing rostered assignment') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_relief_no_leave_or_training_update
+BEFORE UPDATE OF staff_id,duty_date,status,target_department_id,shift_code ON workforce_relief_assignments
+WHEN NEW.status IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM leave_requests l
+    WHERE l.staff_id=NEW.staff_id AND l.date=NEW.duty_date
+      AND l.status IN ('pending','approved')
+  ) THEN RAISE(ABORT, 'Relief conflicts with pending or approved leave') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.duty_date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Relief conflicts with an approved trainee assignment') END;
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM shift_assignments sa
+    JOIN schedules sc ON sc.id=sa.schedule_id
+    WHERE sa.staff_id=NEW.staff_id AND sa.date=NEW.duty_date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND NOT (
+        sa.coverage_department_id=NEW.target_department_id
+        AND sa.coverage_shift_code=NEW.shift_code
+      )
+      AND sc.id=(
+        SELECT latest.id FROM schedules latest
+        WHERE latest.month=sc.month AND latest.department_id=sc.department_id
+        ORDER BY latest.generated_at DESC LIMIT 1
+      )
+  ) THEN RAISE(ABORT, 'Relief conflicts with an existing rostered assignment') END;
+END;
