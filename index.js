@@ -243,6 +243,33 @@ export default {
         return json({ staff: results, departments, qualifications, role: me.role, authority_level: (await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first())?.authority_level ?? 0 });
       }
 
+      if (pathname === '/api/workforce/policies' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT p.*, s.name AS staff_name FROM staff_shift_policies p JOIN staff s ON s.id=p.staff_id ORDER BY s.name'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/policies' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || !['allowed','restricted','exception_only','prohibited'].includes(body.night_mode)
+          || !Number.isInteger(body.max_consecutive_days) || body.max_consecutive_days < 1 || body.max_consecutive_days > 7
+          || !Number.isInteger(body.min_rest_hours) || body.min_rest_hours < 8 || body.min_rest_hours > 24) {
+          return json({ error: 'Invalid shift policy values' }, { status: 400 });
+        }
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        if (!target?.active) return json({ error: 'Active employee not found' }, { status: 404 });
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from, updated_by, updated_at) VALUES (?, ?, ?, ?, date('now'), ?, ?) ON CONFLICT(staff_id) DO UPDATE SET night_mode=excluded.night_mode, max_consecutive_days=excluded.max_consecutive_days, min_rest_hours=excluded.min_rest_hours, effective_from=excluded.effective_from, updated_by=excluded.updated_by, updated_at=excluded.updated_at").bind(body.staff_id, body.night_mode, body.max_consecutive_days, body.min_rest_hours, me.id, new Date().toISOString()),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'shift_policy.updated', 'staff_shift_policy', body.staff_id, JSON.stringify({ night_mode: body.night_mode, max_consecutive_days: body.max_consecutive_days, min_rest_hours: body.min_rest_hours }))
+        ]);
+        return json({ ok: true });
+      }
+
       if (pathname === '/api/workforce/qualifications' && request.method === 'GET') {
         const denied = requireAnyPermission('qualifications.manage');
         if (denied) return denied;
