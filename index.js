@@ -406,10 +406,14 @@ export default {
           return json({ error: 'name and department_id are required' }, { status: 400 });
         }
         const id = body.id || body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        await env.DB.prepare(
-          'INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)'
-        ).bind(id, body.name, body.department_id, ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff').run();
-        return json({ id, name: body.name, department_id: body.department_id }, { status: 201 });
+        const role = ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff';
+        if (!['ISOC','SCE','ROC','HR'].includes(body.department_id)) return json({ error: 'Unknown department' }, { status: 400 });
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)').bind(id, body.name, body.department_id, role),
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id, role }))
+        ]);
+        return json({ id, name: body.name, department_id: body.department_id, role }, { status: 201 });
       }
 
       const staffIdMatch = pathname.match(/^\/api\/staff\/([^/]+)$/);
