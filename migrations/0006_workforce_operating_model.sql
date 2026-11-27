@@ -143,7 +143,10 @@ CREATE INDEX IF NOT EXISTS idx_duty_ops_manager_date
   ON duty_ops_assignments(manager_staff_id, duty_date);
 
 -- Initial workforce configuration requested by operations.
-UPDATE staff SET role = 'admin', name = 'Griffin' WHERE id = 'griffin';
+-- Griffin is the platform administrator; create the account if not present.
+INSERT OR IGNORE INTO staff (id, name, department_id, active, role, pin_set)
+VALUES ('griffin', 'Griffin', 'ROC', 1, 'admin', 0);
+UPDATE staff SET role = 'admin', name = 'Griffin', active = 1 WHERE id = 'griffin';
 UPDATE staff SET role = 'duty_ops_manager' WHERE id = 'hilda';
 UPDATE staff SET role = 'technical_assistant' WHERE id = 'wayne';
 UPDATE staff SET active = 0 WHERE id = 'david';
