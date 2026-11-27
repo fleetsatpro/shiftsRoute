@@ -206,8 +206,11 @@ export default {
         if (denied) return denied;
         const body = await request.json();
         const { staff_id } = body;
-        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(staff_id).first();
+        const target = await env.DB.prepare('SELECT id, active, role FROM staff WHERE id = ?').bind(staff_id).first();
         if (!target?.active) return json({ error: 'Active staff account not found' }, { status: 404 });
+        const targetAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+        const actorAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+        if (me.role !== 'admin' && (targetAuthority?.authority_level ?? 0) >= (actorAuthority?.authority_level ?? 0)) return json({ error: 'You cannot reset credentials at or above your authority level' }, { status: 403 });
         const enrollmentCode = [...crypto.getRandomValues(new Uint8Array(24))]
           .map((b) => b.toString(16).padStart(2, '0')).join('');
         await env.DB.batch([
@@ -466,6 +469,7 @@ export default {
         }
         const id = body.id || body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         const role = ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff';
+        if (me.role !== 'admin' && ['admin','duty_ops_manager'].includes(role)) return json({ error: 'Only the platform administrator can create platform administrators or peer Duty Ops Managers' }, { status: 403 });
         if (!['ISOC','SCE','ROC','HR'].includes(body.department_id)) return json({ error: 'Unknown department' }, { status: 400 });
         await env.DB.batch([
           env.DB.prepare('INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)').bind(id, body.name, body.department_id, role),
@@ -513,6 +517,10 @@ export default {
           const denied = requireAdmin();
           if (denied) return denied;
           if (staffId === me.id) return json({ error: 'Cannot deactivate your own account' }, { status: 400 });
+          const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+          const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target?.role || 'staff').first();
+          const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+          if (me.role !== 'admin' && (targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) return json({ error: 'You cannot deactivate an account at or above your authority level' }, { status: 403 });
           await env.DB.prepare('UPDATE staff SET active = 0 WHERE id = ?').bind(staffId).run();
           await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staffId).run();
           return json({ deactivated: true });
