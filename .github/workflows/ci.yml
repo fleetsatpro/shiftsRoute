@@ -36,6 +36,41 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run desktop and mobile browser acceptance tests
         run: npm run test:e2e
+      - name: Generate a one-run local Worker test PIN
+        id: local-pin
+        shell: bash
+        run: |
+          pin="$(node --input-type=module -e "import { randomInt } from 'node:crypto'; process.stdout.write(String(randomInt(0, 1000000)).padStart(6, '0'))")"
+          echo "::add-mask::$pin"
+          echo "value=$pin" >> "$GITHUB_OUTPUT"
+
+      - name: Exercise the real Wrangler Worker and isolated local D1 in desktop and mobile browsers
+        env:
+          E2E_DEMO_PIN: ${{ steps.local-pin.outputs.value }}
+        shell: bash
+        run: |
+          node tests/e2e/worker-server.mjs > worker-browser-server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill -TERM "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          healthy=false
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent http://127.0.0.1:8788/api/health > /dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$healthy" != true ]; then
+            cat worker-browser-server.log
+            echo "Local Worker did not become healthy."
+            exit 1
+          fi
+          E2E_BASE_URL=http://127.0.0.1:8788 E2E_DEMO_PIN="$E2E_DEMO_PIN" npx playwright test tests/e2e/worker-preview.spec.js
+
       - name: Upload browser reports, traces, screenshots, and videos
         if: always()
         uses: actions/upload-artifact@v4

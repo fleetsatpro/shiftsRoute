@@ -8,9 +8,13 @@ const databaseId = '8da5bc85-6f45-44a4-b00d-4b93692fd643';
 const pin = process.env.E2E_DEMO_PIN || '';
 
 if (!/^\d{6}$/.test(pin)) throw new Error('E2E_DEMO_PIN must be a six-digit value.');
-if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) {
-  throw new Error('Cloudflare preview credentials are required for the isolated D1 seed.');
+const mode = process.env.E2E_D1_MODE || 'remote';
+const persistTo = process.env.E2E_D1_PERSIST_TO || '';
+if (!['local', 'remote'].includes(mode)) throw new Error('E2E_D1_MODE must be local or remote.');
+if (mode === 'remote' && (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID)) {
+  throw new Error('Cloudflare preview credentials are required for the isolated remote D1 seed.');
 }
+if (mode === 'local' && !persistTo) throw new Error('E2E_D1_PERSIST_TO is required for a local D1 seed.');
 
 const config = await readFile(configFile, 'utf8');
 if (!config.includes(`database_name = "${database}"`) || !config.includes(`database_id = "${databaseId}"`)) {
@@ -42,10 +46,11 @@ const sql = [
 ].join('\n');
 
 const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(executable, [
-  'wrangler', 'd1', 'execute', database,
-  '--remote', '--config', configFile, '--command', sql,
-], { stdio: 'inherit', env: process.env });
+const d1Args = ['wrangler', 'd1', 'execute', database];
+if (mode === 'local') d1Args.push('--local', '--persist-to', persistTo);
+else d1Args.push('--remote');
+d1Args.push('--config', configFile, '--command', sql);
+const result = spawnSync(executable, d1Args, { stdio: 'inherit', env: process.env });
 
 if (result.error) throw result.error;
 if (result.status !== 0) throw new Error(`Wrangler D1 seed failed with exit code ${result.status}.`);
