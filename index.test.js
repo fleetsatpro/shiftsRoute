@@ -16,9 +16,12 @@ test('CSV export quotes fields and neutralizes spreadsheet formulas', () => {
   const csv = buildCsv([
     { staff_id: 's1', staff_name: '=HYPERLINK("https://evil.test","click")', department_id: '+CMD', date: '2026-11-01', shift_code: 'D' },
     { staff_id: 's2', staff_name: 'Normal, Name', department_id: 'SCE', date: '2026-11-01', shift_code: 'N' },
+    { staff_id: 's3', staff_name: 'Cross Desk', roster_department_id: 'ISOC', home_department_id: 'SCE', date: '2026-11-02', shift_code: 'FSA', coverage_department_id: 'ISOC', coverage_shift_code: 'D' },
   ], '2026-11');
   assert.ok(csv.includes('"\'=HYPERLINK(""https://evil.test"",""click"")"'));
   assert.ok(csv.includes('"\'+CMD"'));
   assert.ok(csv.includes('"Normal, Name"'));
-  assert.ok(csv.startsWith('"Department","Staff","2026-11-01"'));
+  assert.ok(csv.includes('"ISOC","Cross Desk","SCE"'));
+  assert.ok(csv.includes('"FSA:ISOC/D"'));
+  assert.ok(csv.startsWith('"Department","Staff","Home Team","2026-11-01"'));
 });

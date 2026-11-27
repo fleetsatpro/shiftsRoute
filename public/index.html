@@ -1285,9 +1285,22 @@
           <div class="panel-header"><h2>Workforce eligibility and coverage</h2></div>
           <div id="workforceCoverage" class="staff-table-wrap"></div>
         </div>
+        <div class="panel relief-panel">
+          <div class="panel-header"><h2>Cross-desk relief control</h2><span class="muted">Exceptional use only · separate approval required</span></div>
+          <p class="muted">Relief is not a routine staffing pool. The receiving desk roster must already be generated so the system can verify an actual uncovered minimum. Every deployment is date-specific, reasoned, checked against leave, rotation and other duties, and approved by a different Duty Ops Manager or the platform administrator.</p>
+          <form id="dutyReliefForm" class="leave-form">
+            <label class="ctrl-label" for="dutyReliefStaff">Cross-qualified employee</label><select id="dutyReliefStaff" required></select>
+            <label class="ctrl-label" for="dutyReliefDept">Receiving desk</label><select id="dutyReliefDept" required></select>
+            <label class="ctrl-label" for="dutyReliefShift">Required shift</label><select id="dutyReliefShift" required></select>
+            <label class="ctrl-label" for="dutyReliefDate">Deployment date</label><input id="dutyReliefDate" type="date" required />
+            <label class="ctrl-label" for="dutyReliefReason">Operational necessity (required)</label><input id="dutyReliefReason" maxlength="1000" minlength="12" placeholder="Explain the shortage and why home-team staffing is insufficient" required />
+            <button class="primary" type="submit">Request controlled relief</button>
+          </form>
+          <div id="dutyReliefRows" class="leave-list"><p class="muted">No cross-desk relief deployments requested for this month.</p></div>
+        </div>
         <div class="panel">
           <div class="panel-header"><h2>Emergency night-shift exceptions</h2><span class="muted">Independent approval required</span></div>
-          <div id="dutyExceptions" class="leave-list"><p class="muted">No exceptions loaded.</p></div>
+          <div id="dutyExceptions" class="leave-list"><p class="muted">No emergency exceptions loaded.</p></div>
         </div>
       </section>
 
@@ -1333,10 +1346,35 @@
           <form id="hrLeaveForm" class="leave-form">
             <label class="ctrl-label" for="hrLeaveStaff">Employee</label><select id="hrLeaveStaff" required></select>
             <label class="ctrl-label" for="hrLeaveDate">Date</label><input id="hrLeaveDate" type="date" required />
+            <label class="ctrl-label" for="hrLeaveType">Leave category</label>
+            <select id="hrLeaveType"><option value="PL">Paternity leave (PL)</option><option value="ML">Maternity leave (ML)</option><option value="SL">Sick leave (SL)</option><option value="L">General / legacy leave (L)</option></select>
             <label class="ctrl-label" for="hrLeaveStatus">Status</label><select id="hrLeaveStatus"><option value="approved">Approved</option><option value="pending">Pending</option></select>
             <button class="primary" type="submit">Record leave</button>
           </form>
           <div id="hrLeaveRows" class="leave-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Trainee assignments</h2><span class="muted">T · supervised training duty, not normal desk coverage</span></div>
+          <form id="hrTraineeForm" class="leave-form">
+            <label class="ctrl-label" for="hrTraineeStaff">Employee</label><select id="hrTraineeStaff" required></select>
+            <label class="ctrl-label" for="hrTraineeDate">Training date</label><input id="hrTraineeDate" type="date" required />
+            <label class="ctrl-label" for="hrTraineeReason">Training / supervisor reference</label><input id="hrTraineeReason" minlength="12" maxlength="1000" placeholder="Enter training cohort or supervisor and purpose" required />
+            <button class="primary" type="submit">Record trainee day</button>
+          </form>
+          <div id="hrTraineeRows" class="leave-list"><p class="muted">No training assignments recorded for this month.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Staff rotation patterns</h2><span class="muted">Effective-dated · anchored cycle</span></div>
+          <p class="muted">Configure each employee’s actual desk rotation separately. Use the desk’s own codes and O for rest, for example D,D,N,N,O,O,O or DC,DC,NC,O,O,DC,DC. Approved leave, training and exceptional relief take precedence; the system will not silently rewrite the cycle to make headcount look balanced.</p>
+          <form id="hrRotationForm" class="leave-form">
+            <label class="ctrl-label" for="hrRotationStaff">Employee</label><select id="hrRotationStaff" required></select>
+            <label class="ctrl-label" for="hrRotationDept">Home desk</label><select id="hrRotationDept" required></select>
+            <label class="ctrl-label" for="hrRotationEffective">Effective from</label><input id="hrRotationEffective" type="date" required />
+            <label class="ctrl-label" for="hrRotationAnchor">Cycle anchor date</label><input id="hrRotationAnchor" type="date" required />
+            <label class="ctrl-label" for="hrRotationCodes">Rotation cycle (comma-separated)</label><input id="hrRotationCodes" minlength="1" maxlength="150" placeholder="D,D,N,N,O,O,O" required />
+            <button class="primary" type="submit">Save rotation pattern</button>
+          </form>
+          <div id="hrRotationRows" class="leave-list"><p class="muted">No effective rotation patterns configured.</p></div>
         </div>
       </section>
 
@@ -1452,8 +1490,27 @@
 #tab-duty .list-row, #tab-hr .list-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border); }
 #tab-duty .list-row strong, #tab-hr .list-row strong { color:var(--text); min-width:110px; }
 #tab-duty .muted, #tab-hr .muted { color:var(--text-2); }
-#tab-hr form.leave-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; align-items:end; }
-#tab-hr form.leave-form label { color:var(--text-2); }
-#tab-hr form.leave-form input, #tab-hr form.leave-form select { min-width:0; }
-@media(max-width:700px) { #tab-hr form.leave-form { grid-template-columns:1fr 1fr; } }
+#tab-hr form.leave-form, #tab-duty form.leave-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; align-items:end; }
+#tab-hr form.leave-form label, #tab-duty form.leave-form label { color:var(--text-2); }
+#tab-hr form.leave-form input, #tab-hr form.leave-form select,
+#tab-duty form.leave-form input, #tab-duty form.leave-form select { min-width:0; }
+#tab-duty .relief-panel { border-color:rgba(255,183,102,.38); background:linear-gradient(145deg,rgba(43,31,41,.97),rgba(14,20,36,.98)); }
+#tab-duty .relief-panel .primary { background:linear-gradient(110deg,#8055e8,#d18b52); }
+.roster-origin { display:block; margin-top:3px; color:var(--accent); font-size:10px; font-weight:700; letter-spacing:.03em; }
+td.cross-team { background:rgba(124,140,255,.055); }
+.cell.shift-PL, .cell.shift-ML, .cell.shift-SL, .cell.shift-T, .cell.shift-FSA { font-weight:800; letter-spacing:.02em; }
+.cell.shift-PL { color:#f5c16c; background:rgba(245,193,108,.13); border-color:rgba(245,193,108,.35); }
+.cell.shift-ML { color:#f2a7d3; background:rgba(242,167,211,.13); border-color:rgba(242,167,211,.35); }
+.cell.shift-SL { color:#ff9d85; background:rgba(255,157,133,.13); border-color:rgba(255,157,133,.35); }
+.cell.shift-T { color:#a9baff; background:rgba(129,154,255,.14); border-color:rgba(129,154,255,.4); }
+.cell.shift-FSA { color:#f1bd8e; background:rgba(241,189,142,.14); border-color:rgba(241,189,142,.4); }
+.code-badge.shift-PL { color:#f5c16c; background:rgba(245,193,108,.14); }
+.code-badge.shift-ML { color:#f2a7d3; background:rgba(242,167,211,.14); }
+.code-badge.shift-SL { color:#ff9d85; background:rgba(255,157,133,.14); }
+.code-badge.shift-T { color:#a9baff; background:rgba(129,154,255,.14); }
+.code-badge.shift-FSA { color:#f1bd8e; background:rgba(241,189,142,.14); }
+@media(max-width:700px) {
+  #tab-hr form.leave-form, #tab-duty form.leave-form { grid-template-columns:1fr 1fr; }
+  #tab-duty .relief-panel #dutyReliefReason { grid-column:1/-1; }
+}
 </style>

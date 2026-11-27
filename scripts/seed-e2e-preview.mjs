@@ -34,6 +34,9 @@ const values = demoStaff.map((person, index) => {
 
 const sql = [
   'DELETE FROM workforce_shift_exceptions;',
+  'DELETE FROM workforce_relief_assignments;',
+  'DELETE FROM workforce_staff_markers;',
+  'DELETE FROM workforce_staff_designations;',
   'DELETE FROM duty_ops_assignments;',
   'DELETE FROM workforce_audit_events;',
   'DELETE FROM staff_department_qualifications;',

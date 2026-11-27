@@ -12,7 +12,13 @@ const CYCLE_ORDER = {
   ISOC: ['D', 'N', 'O', 'L'],
   SCE:  ['DC', 'NC', 'O', 'L'],
 };
-const SHIFT_LABEL = { D: 'Day', N: 'Night', DC: 'Day', NC: 'Night', O: 'Off', L: 'Leave' };
+const SHIFT_LABEL = {
+  D: 'ISOC Day', N: 'ISOC Night', DC: 'SCE / SCM Day', NC: 'SCE / SCM Night',
+  O: 'Off', L: 'Leave', PL: 'Paternity leave', ML: 'Maternity leave',
+  SL: 'Sick leave', T: 'Trainee', FSA: 'Field Supervisor',
+};
+const LEAVE_CODES = new Set(['L', 'PL', 'ML', 'SL']);
+const WORK_CODES = new Set(['D', 'N', 'DC', 'NC', 'T', 'FSA']);
 
 let state = {
   me:         null,  // { id, name, department_id, role }
@@ -24,6 +30,8 @@ let state = {
   leave:      [],
   swaps:      [],
   myLeave:    [],
+  hrMarkers:  [],
+  hrRelief:   [],
   activeTab:  'mine',
   mineFilter: 'all',
 };
@@ -196,7 +204,7 @@ async function startApp() {
     return;
   }
 
-  state.department = state.me.department_id;
+  state.department = ['ISOC','SCE'].includes(state.me.department_id) ? state.me.department_id : 'ISOC';
   el('dept').value  = state.department;
   el('dept').disabled = !isAdmin;
   updateDeptBadge();
@@ -217,7 +225,10 @@ async function startApp() {
 }
 
 function updateDeptBadge() {
-  el('deptBadge').textContent = state.department === 'SCE' ? 'SCE / SCM' : 'ISOC';
+  const home = state.me?.department_id;
+  el('deptBadge').textContent = home && !['ISOC','SCE'].includes(home)
+    ? 'Relief deployments'
+    : state.department === 'SCE' ? 'SCE / SCM' : 'ISOC';
 }
 
 // ── Data loaders ──────────────────────────────────────────
@@ -245,6 +256,13 @@ async function loadSwaps() {
 
 // BUG FIX: now sends department filter so correct schedule is returned
 async function loadLatest() {
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
+  if (!isAdmin) {
+    state.schedule = null;
+    state.mine = await api('/workforce/my-roster?month=' + encodeURIComponent(state.month));
+    renderAll();
+    return;
+  }
   const list = await api(`/schedules?month=${state.month}&department=${state.department}`);
   if (list.length === 0) {
     state.schedule = null;
@@ -569,17 +587,21 @@ async function cancelSwap(id) {
 // ── Workforce workspaces ──────────────────────────────────
 async function loadHRWorkspace() {
   const month = el('month')?.value || todayMonth();
-  const [staff, qualifications, leave, overview, policies] = await Promise.all([
+  const [staff, qualifications, leave, overview, policies, markers, rotationPatterns] = await Promise.all([
     api('/hr/staff'),
     api('/workforce/qualifications'),
     api('/leave?month=' + encodeURIComponent(month)),
     api('/workforce/overview'),
     api('/workforce/policies'),
+    api('/workforce/staff-markers?month=' + encodeURIComponent(month)),
+    api('/workforce/rotation-patterns?month=' + encodeURIComponent(month)),
   ]);
   state.hrStaff = staff;
   state.hrQualifications = qualifications;
   state.hrLeave = leave;
   state.hrPolicies = policies;
+  state.hrMarkers = markers;
+  state.hrRotationPatterns = rotationPatterns;
   el('hrActiveCount').textContent = staff.filter(person => person.active).length;
   el('hrPendingCount').textContent = staff.filter(person => person.active && !person.pin_set).length;
   el('hrQualificationCount').textContent = qualifications.filter(q => !q.effective_to).length;
@@ -587,7 +609,10 @@ async function loadHRWorkspace() {
     <tr><td>${escHtml(person.name)}</td><td>${escHtml(person.department_id)}</td>
     <td>${escHtml(person.role)}</td><td>${person.pin_set ? 'Enrolled' : 'Pending'}</td>
     <td>${person.active ? 'Active' : 'Inactive'}</td></tr>`).join('');
-  const operationalStaff = staff.filter(person => person.active && overview.departments.some(department => department.id === person.department_id));
+  const operationalDepartments = new Set(overview.departments.map(department => department.id));
+  const qualifiedStaffIds = new Set(qualifications.map(qualification => qualification.staff_id));
+  const operationalStaff = staff.filter(person => person.active
+    && (operationalDepartments.has(person.department_id) || qualifiedStaffIds.has(person.id)));
   const departmentOptions = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   el('hrQualDept').innerHTML = departmentOptions;
   el('hrNewDepartment').innerHTML = departmentOptions;
@@ -595,11 +620,17 @@ async function loadHRWorkspace() {
   select.innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrPolicyStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrTraineeStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrRotationStaff').innerHTML = operationalStaff.filter(person => ['ISOC','SCE'].includes(person.department_id))
+    .map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrRotationDept').innerHTML = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   el('hrPolicyRows').innerHTML = policies.map(policy => `<div class="list-row"><strong>${escHtml(policy.staff_name)}</strong><span class="muted">${escHtml(policy.night_mode)} · max ${policy.max_consecutive_days} consecutive · rest ${policy.min_rest_hours}h</span></div>`).join('');
-  el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
+  el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="code-badge shift-${safeShiftCode(item.leave_type || 'L')}">${escHtml(item.leave_type || 'L')}</span> <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
+  el('hrTraineeRows').innerHTML = markers.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(item.staff_name)} <span class="code-badge shift-T">T</span> <span class="muted">${escHtml(item.reason)}</span></div>`).join('') || '<p class="muted">No training assignments recorded for this month.</p>';
+  el('hrRotationRows').innerHTML = rotationPatterns.map(item => `<div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.department_name)} <span class="muted">${escHtml(item.effective_from)}${item.effective_to ? " – " + escHtml(item.effective_to) : " · current"}</span><span class="code-badge">${escHtml((item.cycle_codes || []).join(' · '))}</span></div>`).join('') || '<p class="muted">No effective rotation patterns configured.</p>';
   el('hrQualificationRows').innerHTML = qualifications.map(q => `
     <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_name)}
-    <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''} · from ${escHtml(q.effective_from)}${q.effective_to ? ' · to ' + escHtml(q.effective_to) : ' · current'}</span></div>`).join('') || '<p class="muted">No verified qualifications recorded.</p>';
+    <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''}${q.relief_only ? ' · relief-only (approval required)' : ' · primary qualification'} · from ${escHtml(q.effective_from)}${q.effective_to ? ' · to ' + escHtml(q.effective_to) : ' · current'}</span></div>`).join('') || '<p class="muted">No verified qualifications recorded.</p>';
 }
 
 async function addHrEmployee() {
@@ -636,10 +667,12 @@ async function saveHrQualification(event) {
 async function loadDutyWorkspace() {
   const overview = await api('/workforce/overview');
   const month = el('month').value || todayMonth();
-  const [rota, exceptions] = await Promise.all([
+  const [rota, exceptions, relief] = await Promise.all([
     api('/workforce/duty-rota?month=' + encodeURIComponent(month)),
     api('/workforce/shift-exceptions?month=' + encodeURIComponent(month)),
+    api('/workforce/relief-assignments?month=' + encodeURIComponent(month)),
   ]);
+  state.hrRelief = relief;
   const managers = overview.staff.filter(person => person.active && person.role === 'duty_ops_manager');
   el('dutyManagerCount').textContent = managers.length;
   el('dutyAssignedCount').textContent = rota.filter(item => item.manager_staff_id).length;
@@ -654,6 +687,42 @@ async function loadDutyWorkspace() {
     <div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.date)} · ${escHtml(item.shift_code)}
     <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
     ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
+  const reliefByStaff = new Map();
+  const reliefStaff = new Map(overview.staff.map(person => [person.id, person]));
+  for (const qualification of overview.qualifications) {
+    const person = reliefStaff.get(qualification.staff_id);
+    if (!qualification.relief_only || !person?.active) continue;
+    if (!reliefByStaff.has(qualification.staff_id)) {
+      reliefByStaff.set(qualification.staff_id, {
+        person,
+        qualifications: [],
+      });
+    }
+    reliefByStaff.get(qualification.staff_id).qualifications.push(qualification);
+  }
+  el('dutyReliefStaff').innerHTML = [...reliefByStaff.values()].map(entry => {
+    const targets = [...new Set(entry.qualifications.map(item => item.department_id))];
+    const fieldSupervisor = entry.qualifications.some(item =>
+      item.designation === 'Field Supervisor' && item.relief_capable === 1
+    );
+    return `<option value="${escHtml(entry.person.id)}"
+      data-department="${escHtml(entry.person.department_id)}"
+      data-targets="${escHtml(targets.join(','))}"
+      data-designation="${fieldSupervisor ? 'Field Supervisor' : ''}"
+      data-relief-capable="${fieldSupervisor ? '1' : '0'}">${escHtml(entry.person.name)} · ${escHtml(entry.person.department_id)}${fieldSupervisor ? ' · Field Supervisor' : ''}</option>`;
+  }).join('');
+  el('dutyReliefDept').innerHTML = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
+  updateReliefShiftOptions();
+  const canReviewRelief = state.me.permissions?.includes('exceptions.approve') || ['admin','duty_ops_manager'].includes(state.me.role);
+  el('dutyReliefRows').innerHTML = relief.map(item => `
+    <div class="list-row">
+      <strong>${escHtml(item.duty_date)} · ${escHtml(item.staff_name)}</strong>
+      <span class="code-badge shift-${safeShiftCode(item.display_code)}">${escHtml(item.display_code)}</span>
+      <span class="muted">${escHtml(item.home_department_id)} → ${escHtml(item.target_department_name)} · ${escHtml(item.shift_code)} · ${escHtml(item.status)} · ${escHtml(item.reason)}</span>
+      ${item.status === 'pending' && canReviewRelief && item.requested_by !== state.me.id
+        ? `<button class="ghost" data-relief-action="approved" data-relief-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-relief-action="rejected" data-relief-id="${escHtml(item.id)}">Reject</button>`
+        : item.status === 'pending' && item.requested_by === state.me.id ? '<span class="muted">Awaiting independent reviewer</span>' : ''}
+    </div>`).join('') || '<p class="muted">No cross-team relief deployments requested for this month.</p>';
 }
 
 async function saveHrPolicy(event) {
@@ -673,11 +742,105 @@ async function saveHrPolicy(event) {
 
 async function saveHrLeave(event) {
   event.preventDefault();
-  const payload = { staff_id: el('hrLeaveStaff').value, date: el('hrLeaveDate').value, status: el('hrLeaveStatus').value };
+  const payload = {
+    staff_id: el('hrLeaveStaff').value,
+    date: el('hrLeaveDate').value,
+    status: el('hrLeaveStatus').value,
+    leave_type: el('hrLeaveType').value,
+  };
   try {
     await api('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     await loadHRWorkspace();
-    toast('Leave record saved.', 'success');
+    toast(payload.leave_type + ' leave record saved.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+function updateReliefShiftOptions() {
+  const department = el('dutyReliefDept')?.value || 'ISOC';
+  const select = el('dutyReliefShift');
+  const staffSelect = el('dutyReliefStaff');
+  if (!select || !staffSelect) return;
+  const options = DEPT_CODES[department];
+  select.innerHTML = `<option value="${options.day}">Day (${options.day})</option><option value="${options.night}">Night (${options.night})</option>`;
+
+  // Only offer employees who are effectively relief-qualified for the chosen
+  // receiving desk. The Worker still revalidates the authoritative D1 records.
+  const eligible = [];
+  for (const option of staffSelect.options) {
+    const targets = (option.dataset.targets || '').split(',').filter(Boolean);
+    option.hidden = !targets.includes(department);
+    if (!option.hidden) eligible.push(option);
+  }
+  if (!eligible.some(option => option.value === staffSelect.value)) {
+    staffSelect.value = eligible[0]?.value || '';
+  }
+  const submit = el('dutyReliefForm')?.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = eligible.length === 0;
+}
+
+async function submitReliefAssignment(event) {
+  event.preventDefault();
+  const staff_id = el('dutyReliefStaff').value;
+  const shift_code = el('dutyReliefShift').value;
+  const payload = {
+    staff_id,
+    duty_date: el('dutyReliefDate').value,
+    target_department_id: el('dutyReliefDept').value,
+    shift_code,
+    display_code: el('dutyReliefStaff').selectedOptions[0]?.dataset.reliefCapable === '1'
+      && el('dutyReliefStaff').selectedOptions[0]?.dataset.designation === 'Field Supervisor'
+      ? 'FSA' : shift_code,
+    reason: el('dutyReliefReason').value.trim(),
+  };
+  try {
+    await api('/workforce/relief-assignments', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    el('dutyReliefReason').value = '';
+    await loadDutyWorkspace();
+    toast('Relief request recorded. A different authorised reviewer must approve it.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function reviewReliefAssignment(id, status) {
+  if (!confirm(`Are you sure you want to ${status} this cross-team relief deployment?`)) return;
+  try {
+    await api('/workforce/relief-assignments/' + encodeURIComponent(id), {
+      method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status}),
+    });
+    await loadDutyWorkspace();
+    toast('Relief deployment ' + status + '.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function saveRotationPattern(event) {
+  event.preventDefault();
+  const cycle_codes = el('hrRotationCodes').value.split(',').map(code => code.trim().toUpperCase()).filter(Boolean);
+  const payload = {
+    staff_id: el('hrRotationStaff').value,
+    department_id: el('hrRotationDept').value,
+    effective_from: el('hrRotationEffective').value,
+    anchor_date: el('hrRotationAnchor').value,
+    cycle_codes,
+  };
+  try {
+    await api('/workforce/rotation-patterns', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Rotation pattern saved and effective-dated.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function saveTraineeMarker(event) {
+  event.preventDefault();
+  const payload = {
+    staff_id: el('hrTraineeStaff').value,
+    date: el('hrTraineeDate').value,
+    marker_code: 'T',
+    reason: el('hrTraineeReason').value.trim(),
+  };
+  try {
+    await api('/workforce/staff-markers', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    el('hrTraineeReason').value = '';
+    await loadHRWorkspace();
+    toast('Training assignment recorded.', 'success');
   } catch(err) { toast(err.message, 'error'); }
 }
 
@@ -802,37 +965,37 @@ function renderMine() {
     subEl.textContent = state.month;
     return;
   }
-  const { my_shifts, coworkers_by_date, month } = state.mine;
+  const { my_shifts, my_shift_details = {}, coworkers_by_date, month } = state.mine;
   const nDays = daysInMonth(month);
   subEl.textContent = month;
-
-  const filter  = state.mineFilter;
-  const workCodes = new Set([DEPT_CODES[state.department]?.day, DEPT_CODES[state.department]?.night, state.mine.day_code, state.mine.night_code].filter(Boolean));
-
-  let html = '';
-  for (let d = 1; d <= nDays; d++) {
-    const ds   = dateStr(month, d);
-    const code = my_shifts[ds] || 'O';
-    const isWorking = workCodes.has(code);
-    const isLeave   = code === 'L';
-
+  const filter = state.mineFilter;
+  const html = [];
+  for (let day = 1; day <= nDays; day++) {
+    const date = dateStr(month, day);
+    const code = my_shifts[date] || 'O';
+    const detail = my_shift_details[date] || { shift_code: code };
+    const isWorking = WORK_CODES.has(code);
+    const isLeave = LEAVE_CODES.has(code);
     if (filter === 'working' && !isWorking) continue;
-    if (filter === 'off'     && (isWorking || isLeave)) continue;
-
-    const coworkers = Array.isArray(coworkers_by_date[ds]) ? coworkers_by_date[ds] : [];
+    if (filter === 'off' && (isWorking || isLeave || code !== 'O')) continue;
+    const coworkers = Array.isArray(coworkers_by_date[date]) ? coworkers_by_date[date] : [];
     const safeCode = safeShiftCode(code);
-    const coText = coworkers.length
+    const coveredCode = detail.coverage_shift_code || code;
+    const targetDesk = detail.coverage_department_id === 'SCE' ? 'SCE / SCM' : detail.coverage_department_id;
+    const description = detail.coverage_department_id
+      ? `Relief for ${escHtml(targetDesk)} · ${escHtml(SHIFT_LABEL[coveredCode] || coveredCode)}`
+      : escHtml(SHIFT_LABEL[safeCode] || safeCode);
+    const coworkerText = coworkers.length
       ? `With <b>${coworkers.map(escHtml).join(', ')}</b>`
-      : isWorking ? 'Solo coverage' : '';
-
-    html += `
+      : isWorking ? 'Assigned' : '';
+    html.push(`
       <div class="my-shift-row ${isWorking || isLeave ? 'working' : ''}">
-        <span class="shift-date">${friendlyDate(ds)}</span>
+        <span class="shift-date">${friendlyDate(date)}</span>
         <span class="code-badge cell shift-${safeCode}">${safeCode}</span>
-        <span class="shift-detail">${escHtml(SHIFT_LABEL[safeCode] || safeCode)}${coText ? ' · ' + coText : ''}</span>
-      </div>`;
+        <span class="shift-detail">${description}${coworkerText ? ' · ' + coworkerText : ''}</span>
+      </div>`);
   }
-  list.innerHTML = html || `<div style="grid-column:1/-1;color:var(--text-3);padding:20px;font-size:12px;">No shifts match this filter.</div>`;
+  list.innerHTML = html.join('') || `<div style="grid-column:1/-1;color:var(--text-3);padding:20px;font-size:12px;">No shifts match this filter.</div>`;
 }
 
 // ── My leave render ────────────────────────────────────────
@@ -843,7 +1006,7 @@ function renderMyLeave() {
     return;
   }
   el2.innerHTML = state.myLeave.map(l =>
-    `<span class="leave-date-chip">${escHtml(friendlyDate(l.date))}</span>`
+    `<span class="leave-date-chip"><b>${escHtml(l.leave_type || 'L')}</b> · ${escHtml(friendlyDate(l.date))}</span>`
   ).join('');
 }
 
@@ -898,16 +1061,20 @@ function renderLeaveList() {
 
 function renderScheduleMetrics() {
   const panel = el('teamMetrics');
-  const rows = (state.schedule?.assignments || []).filter(row => row.department_id === state.department);
+  const rows = (state.schedule?.assignments || []).filter(row =>
+    row.department_id === state.department || row.coverage_department_id === state.department || row.role === 'duty_ops_manager'
+  );
   if (!rows.length) {
     panel.classList.add('hidden');
     return;
   }
   const codes = DEPT_CODES[state.department];
+  const inThisDesk = row => !row.coverage_department_id || row.coverage_department_id === state.department;
+  const assignedCode = row => row.coverage_shift_code || row.shift_code;
   const staff = new Set(rows.map(row => row.staff_id));
-  const day = rows.filter(row => row.shift_code === codes.day).length;
-  const night = rows.filter(row => row.shift_code === codes.night).length;
-  const leave = rows.filter(row => row.shift_code === 'L').length;
+  const day = rows.filter(row => inThisDesk(row) && assignedCode(row) === codes.day).length;
+  const night = rows.filter(row => inThisDesk(row) && assignedCode(row) === codes.night).length;
+  const leave = rows.filter(row => LEAVE_CODES.has(row.shift_code)).length;
   const overrides = rows.filter(row => !!row.is_manual_override).length;
   el('metricStaff').textContent = staff.size.toLocaleString();
   el('metricDay').textContent = day.toLocaleString();
@@ -928,15 +1095,13 @@ function renderGrid() {
     const heading = document.createElement('strong');
     heading.textContent = 'Coverage warnings';
     const message = document.createElement('p');
-    message.textContent = state.schedule.notes.replace(/^Warnings:\\s*/, '');
+    message.textContent = state.schedule.notes.replace(/^Warnings:\s*/, '');
     banner.append(heading, message);
     box.appendChild(banner);
   }
-
   el('teamGridMonth').textContent = state.month;
   const wrap = el('gridWrap');
   el('coverageRow').classList.add('hidden');
-
   if (!state.schedule?.assignments?.length) {
     wrap.innerHTML = `
       <div class="empty-state">
@@ -947,127 +1112,148 @@ function renderGrid() {
     el('totalsPanel').classList.add('hidden');
     return;
   }
-
-  const month   = state.schedule.month;
-  const nDays   = daysInMonth(month);
-  const codes   = DEPT_CODES[state.department];
+  const month = state.schedule.month;
+  const nDays = daysInMonth(month);
+  const codes = DEPT_CODES[state.department];
   const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
-
-  // Filter to this department's assignments
-  // Staff IDs are external data; use a null-prototype map so values such as
-  // `constructor` or `__proto__` cannot collide with inherited object keys.
   const byStaff = Object.create(null);
   for (const row of state.schedule.assignments) {
-    if (row.department_id !== state.department) continue;
-    if (!byStaff[row.staff_id]) byStaff[row.staff_id] = { name: row.staff_name, days: {} };
-    byStaff[row.staff_id].days[row.date] = { code: safeShiftCode(row.shift_code), override: !!row.is_manual_override };
+    const isHomeRow = row.department_id === state.department;
+    const isReliefTargetRow = row.coverage_department_id === state.department;
+    const isDutyOpsCover = row.role === 'duty_ops_manager';
+    if (!isHomeRow && !isReliefTargetRow && !isDutyOpsCover) continue;
+    if (!byStaff[row.staff_id]) {
+      byStaff[row.staff_id] = {
+        name: row.staff_name, role: row.role, homeDepartment: row.department_id,
+        days: Object.create(null),
+      };
+    }
+    byStaff[row.staff_id].days[row.date] = {
+      code: safeShiftCode(row.shift_code),
+      override: !!row.is_manual_override,
+      coverageDepartment: row.coverage_department_id || null,
+      coverageCode: row.coverage_shift_code || null,
+      borrowed: isReliefTargetRow && row.department_id !== state.department,
+      outgoing: !!row.coverage_department_id && row.coverage_department_id !== state.department,
+      editable: isAdmin && isHomeRow && row.role !== 'duty_ops_manager' && !row.coverage_department_id
+        && CYCLE_ORDER[state.department]?.includes(row.shift_code)
+        && ['D','N','DC','NC','O','L'].includes(row.shift_code),
+    };
   }
-
   if (!Object.keys(byStaff).length) {
     wrap.innerHTML = `<div class="empty-state"><div class="empty-icon">▦</div><div class="empty-title">No assignments for ${state.department}</div></div>`;
     el('totalsPanel').classList.add('hidden');
     return;
   }
-
-  // Build coverage summary data
   const coverageByDay = [];
-  for (let d = 1; d <= nDays; d++) {
-    const ds = dateStr(month, d);
+  for (let day = 1; day <= nDays; day++) {
+    const date = dateStr(month, day);
     let dayCount = 0, nightCount = 0;
-    for (const sid of Object.keys(byStaff)) {
-      const code = byStaff[sid].days[ds]?.code;
-      if (code === codes.day)   dayCount++;
+    for (const staffId of Object.keys(byStaff)) {
+      const cell = byStaff[staffId].days[date];
+      if (!cell || (cell.coverageDepartment && cell.coverageDepartment !== state.department)) continue;
+      const code = cell.coverageCode || cell.code;
+      if (code === codes.day) dayCount++;
       if (code === codes.night) nightCount++;
     }
-    coverageByDay.push({ d, ds, dayCount, nightCount });
+    coverageByDay.push({ day, dayCount, nightCount });
   }
-
-  // Render coverage row
-  const dept = el('dept').value;
-  // We don't have dept mins here directly, but we know ISOC=3, SCE=2/1
-  const dayMin   = dept === 'SCE' ? 2 : 3;
-  const nightMin = dept === 'SCE' ? 1 : 3;
-  el('coverageRow').innerHTML = coverageByDay.map(({ d, dayCount, nightCount }) => `
+  const dayMin = state.department === 'SCE' ? 2 : 3;
+  const nightMin = state.department === 'SCE' ? 1 : 3;
+  el('coverageRow').innerHTML = coverageByDay.map(({day,dayCount,nightCount}) => `
     <div class="cov-day">
-      <div class="cov-date">${d}</div>
+      <div class="cov-date">${day}</div>
       <div class="cov-counts">
         <span class="cov-count ${dayCount >= dayMin ? 'ok' : 'warn'}">${codes.day}:${dayCount}</span>
         <span class="cov-count ${nightCount >= nightMin ? 'ok' : 'warn'}">${codes.night}:${nightCount}</span>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
   el('coverageRow').classList.remove('hidden');
 
-  // Table
   let html = '<table class="schedule"><thead><tr><th class="name-col">Staff</th>';
-  for (let d = 1; d <= nDays; d++) {
-    const wk = isWeekend(month, d) ? ' weekend' : '';
-    html += `<th class="${wk}" title="${dateStr(month, d)}">${dayOfWeekShort(month, d)}<br>${d}</th>`;
+  for (let day = 1; day <= nDays; day++) {
+    const weekend = isWeekend(month, day) ? ' weekend' : '';
+    html += `<th class="${weekend}" title="${dateStr(month,day)}">${dayOfWeekShort(month,day)}<br>${day}</th>`;
   }
-  html += '<th title="Day shifts">D</th><th title="Night shifts">N</th><th title="Leave">L</th><th title="Total worked">∑</th></tr></thead><tbody>';
-
+  html += '<th title="Day shifts">Day</th><th title="Night shifts">Night</th><th title="Leave">Leave</th><th title="Total working / training / relief days">Work</th></tr></thead><tbody>';
   for (const staffId of Object.keys(byStaff)) {
-    const { name, days } = byStaff[staffId];
-    let dayCount = 0, nightCount = 0, leaveCount = 0;
+    const person = byStaff[staffId];
+    const { name, homeDepartment, days } = person;
+    let dayCount = 0, nightCount = 0, leaveCount = 0, workCount = 0;
     const meRow = staffId === state.me.id ? ' me' : '';
-    html += `<tr class="${meRow.trim()}"><td class="name-col">${escHtml(name)}</td>`;
-    for (let d = 1; d <= nDays; d++) {
-      const ds   = dateStr(month, d);
-      const cell = days[ds] || { code: 'O', override: false };
+    const homeLabel = person.role === 'duty_ops_manager' && homeDepartment !== state.department
+      ? '<span class="roster-origin">Duty Ops team cover</span>'
+      : homeDepartment !== state.department
+        ? `<span class="roster-origin">From ${escHtml(homeDepartment)}</span>` : '';
+    html += `<tr class="${meRow.trim()}"><td class="name-col">${escHtml(name)} ${homeLabel}</td>`;
+    for (let day = 1; day <= nDays; day++) {
+      const date = dateStr(month, day);
+      const cell = days[date] || { code: 'O', editable: false };
       const code = safeShiftCode(cell.code);
-      if (code === codes.day) dayCount++;
-      else if (code === codes.night) nightCount++;
-      else if (code === 'L') leaveCount++;
-      const wk = isWeekend(month, d) ? ' weekend' : '';
-      const ov = cell.override ? ' override' : '';
-      const locked = isAdmin ? '' : ' locked';
-      const title = `${ds}: ${SHIFT_LABEL[code] || code}${cell.override ? ' (manual)' : ''}`;
-      html += `<td class="${wk}${ov}" title="${escHtml(title)}">
-        <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${ds}" data-code="${code}" aria-label="${escHtml(name)} on ${ds}: ${code}" ${isAdmin ? '' : 'disabled'}>${code}</button>
+      const coveredCode = cell.coverageCode || cell.code;
+      const isLeave = LEAVE_CODES.has(code);
+      const isWork = WORK_CODES.has(code);
+      if (isLeave) leaveCount++;
+      if (isWork) workCount++;
+      if ((!cell.coverageDepartment || cell.coverageDepartment === state.department) && coveredCode === codes.day) dayCount++;
+      if ((!cell.coverageDepartment || cell.coverageDepartment === state.department) && coveredCode === codes.night) nightCount++;
+      const weekend = isWeekend(month, day) ? ' weekend' : '';
+      const override = cell.override ? ' override' : '';
+      const cross = cell.coverageDepartment ? ' cross-team' : '';
+      const editable = !!cell.editable;
+      const locked = editable ? '' : ' locked';
+      const extra = cell.coverageDepartment
+        ? ` · ${cell.outgoing ? 'Relieving ' + cell.coverageDepartment : 'Relief received'}`
+        : person.role === 'duty_ops_manager' && code !== 'O' ? ' · Duty Ops team cover' : '';
+      const title = `${date}: ${SHIFT_LABEL[code] || code}${extra}${cell.override ? ' (manual)' : ''}`;
+      html += `<td class="${weekend}${override}${cross}" title="${escHtml(title)}">
+        <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${date}" data-code="${code}" aria-label="${escHtml(name)} on ${date}: ${code}${escHtml(extra)}" ${editable ? '' : 'disabled'}>${code}</button>
       </td>`;
     }
-    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount}</td></tr>`;
+    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${workCount}</td></tr>`;
   }
   html += '</tbody></table>';
   wrap.innerHTML = html;
-
-  // One delegated listener survives grid re-renders without accumulating handlers.
   if (!wrap.dataset.bound) {
-    wrap.addEventListener('click', e => {
-      const button = e.target.closest('.cell:not(.locked)');
+    wrap.addEventListener('click', event => {
+      const button = event.target.closest('.cell:not(.locked)');
       if (button && wrap.contains(button)) onCellClick({ currentTarget: button });
     });
     wrap.dataset.bound = '1';
   }
-
   renderTotals(byStaff, month, codes);
   el('totalsPanel').classList.remove('hidden');
 }
 
 function renderTotals(byStaff, month, codes) {
-  const nDays = daysInMonth(month);
+  const days = daysInMonth(month);
   let html = `<thead><tr>
-    <th>Staff</th>
-    <th class="num" style="text-align:right;">Day</th>
-    <th class="num" style="text-align:right;">Night</th>
-    <th class="num" style="text-align:right;">Weekend</th>
-    <th class="num" style="text-align:right;">Leave</th>
-    <th class="num" style="text-align:right;">Total</th>
+    <th>Staff</th><th class="num">Day</th><th class="num">Night</th>
+    <th class="num">Weekend</th><th class="num">Leave</th><th class="num">Training</th>
+    <th class="num">Relief</th><th class="num">Total work</th>
   </tr></thead><tbody>`;
   for (const staffId of Object.keys(byStaff)) {
-    const { name, days } = byStaff[staffId];
-    let dC = 0, nC = 0, lC = 0, wC = 0;
-    for (let d = 1; d <= nDays; d++) {
-      const ds = dateStr(month, d);
-      const code = (days[ds] || { code: 'O' }).code;
-      if (code === codes.day)   { dC++; if (isWeekend(month, d)) wC++; }
-      else if (code === codes.night) { nC++; if (isWeekend(month, d)) wC++; }
-      else if (code === 'L')    lC++;
+    const person = byStaff[staffId];
+    let dayCount = 0, nightCount = 0, leaveCount = 0, trainingCount = 0, reliefCount = 0, weekendCount = 0, totalWork = 0;
+    for (let day = 1; day <= days; day++) {
+      const date = dateStr(month, day);
+      const cell = person.days[date];
+      if (!cell) continue;
+      const code = cell.code;
+      const coveredCode = cell.coverageCode || code;
+      const coversThisDesk = !cell.coverageDepartment || cell.coverageDepartment === state.department;
+      if (LEAVE_CODES.has(code)) leaveCount++;
+      if (code === 'T') { trainingCount++; totalWork++; }
+      else if (code === 'FSA') { reliefCount++; totalWork++; }
+      else if (['D','N','DC','NC'].includes(code)) totalWork++;
+      if (coversThisDesk && coveredCode === codes.day) { dayCount++; if (isWeekend(month, day)) weekendCount++; }
+      if (coversThisDesk && coveredCode === codes.night) { nightCount++; if (isWeekend(month, day)) weekendCount++; }
     }
-    html += `<tr><td class="name-cell">${escHtml(name)}</td>
-      <td class="num">${dC}</td><td class="num">${nC}</td>
-      <td class="num">${wC}</td><td class="num">${lC}</td>
-      <td class="num" style="color:var(--accent);font-weight:700;">${dC + nC}</td></tr>`;
+    html += `<tr><td class="name-cell">${escHtml(person.name)}</td>
+      <td class="num">${dayCount}</td><td class="num">${nightCount}</td>
+      <td class="num">${weekendCount}</td><td class="num">${leaveCount}</td>
+      <td class="num">${trainingCount}</td><td class="num">${reliefCount}</td>
+      <td class="num" style="color:var(--accent);font-weight:700;">${totalWork}</td></tr>`;
   }
   html += '</tbody>';
   el('totalsTable').innerHTML = html;
@@ -1232,6 +1418,14 @@ function init() {
   el('hrQualificationForm').addEventListener('submit', saveHrQualification);
   el('hrPolicyForm').addEventListener('submit', saveHrPolicy);
   el('hrLeaveForm').addEventListener('submit', saveHrLeave);
+  el('hrTraineeForm').addEventListener('submit', saveTraineeMarker);
+  el('hrRotationForm').addEventListener('submit', saveRotationPattern);
+  el('dutyReliefForm').addEventListener('submit', submitReliefAssignment);
+  el('dutyReliefDept').addEventListener('change', updateReliefShiftOptions);
+  el('dutyReliefRows').addEventListener('click', event => {
+    const button = event.target.closest('[data-relief-action]');
+    if (button) reviewReliefAssignment(button.dataset.reliefId, button.dataset.reliefAction);
+  });
   el('dutyExceptions').addEventListener('click', event => {
     const button = event.target.closest('[data-exception-action]');
     if (button) reviewShiftException(button.dataset.exceptionId, button.dataset.exceptionAction);

@@ -8,8 +8,8 @@ test('HTML escaping neutralizes text and attribute metacharacters', () => {
 });
 
 test('rendering accepts only known shift codes and status values', () => {
-  for (const code of ['D', 'N', 'DC', 'NC', 'O', 'L']) assert.equal(safeShiftCode(code), code);
-  assert.equal(safeShiftCode('<script>'), 'O');
+  for (const code of ['D', 'N', 'DC', 'NC', 'O', 'L', 'PL', 'ML', 'SL', 'T', 'FSA']) assert.equal(safeShiftCode(code), code);
+  assert.equal(safeShiftCode('<script>'), '?');
   assert.equal(safeStatus('published'), 'published');
   assert.equal(safeStatus('onmouseover=alert(1)'), 'unknown');
 });
@@ -56,4 +56,14 @@ test('premium theme system exposes five palettes, persists selection, and respec
   assert.match(html, /prefers-reduced-motion:\s*reduce/);
   assert.match(app, /localStorage\.setItem\('shiftsroute-theme'/);
   assert.match(app, /localStorage\.getItem\('shiftsroute-theme'/);
+});
+
+
+test('relief picker filters employees by their effective target-desk qualifications', async () => {
+  const app = await readFile(new URL('./public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /data-targets=/);
+  assert.match(app, /targets\.includes\(department\)/);
+  assert.match(app, /data-designation=/);
+  assert.match(app, /data-relief-capable=/);
+  assert.doesNotMatch(app, /staff_id === ['"]clinton-juma['"]/);
 });

@@ -1,244 +1,397 @@
-// solver.js — ROC Shift Scheduler (production build)
-//
-// Generates a fair, coverage-satisfying monthly shift schedule per department.
-//
-// BUG FIXED: canAssign() priorFinalState comparison now correctly compares
-//   shift *codes* (dept.day_code / dept.night_code) rather than the string
-//   literals 'day' / 'night'.  The original code stored lastShift as 'day'
-//   or 'night' strings but then compared prevCode (which is the actual code,
-//   e.g. 'N' or 'NC') — meaning the night→day rest rule was never enforced
-//   across month boundaries.
-//
-// IMPROVEMENT: improveBalance() now also considers night and weekend
-//   counts when selecting candidates for the swap (not just total), which
-//   avoids thrashing between two staff who differ only in night/weekend counts.
-
-const OFF   = 'O';
-const LEAVE = 'L';
+// solver.js — reference-driven, deterministic monthly roster engine.
+const OFF = 'O';
+const LEAVE_CODES = new Set(['L', 'PL', 'ML', 'SL']);
+const WORK_CODES = new Set(['D', 'N', 'DC', 'NC', 'T', 'FSA']);
+const DAY_CODES = new Set(['D', 'DC']);
+const NIGHT_CODES = new Set(['N', 'NC']);
 
 export function daysInMonth(yyyymm) {
   const [y, m] = yyyymm.split('-').map(Number);
   return new Date(y, m, 0).getDate();
 }
-
 export function dateStr(yyyymm, day) {
   const [y, m] = yyyymm.split('-').map(Number);
-  return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(day).padStart(2, '0');
 }
-
 export function isWeekend(yyyymm, day) {
   const [y, m] = yyyymm.split('-').map(Number);
   const dow = new Date(y, m - 1, day).getDay();
   return dow === 0 || dow === 6;
 }
 
-/**
- * @param {Object} params
- * @param {string} params.month
- * @param {Object} params.department  { id, day_code, night_code, day_min, night_min }
- * @param {Array}  params.staff       [{ id, name }]
- * @param {Object} params.leaveByStaff  { [staffId]: Set<dateStr> }
- * @param {Object} [params.priorFinalState]
- *        { [staffId]: { lastShift: 'day'|'night'|null, consecutiveWork: number } }
- *        Note: lastShift is stored as a *type* string here; internally we map it
- *        to the department's actual shift code.
- * @returns {{ assignments, warnings, totals }}
- */
-export function generateSchedule({ month, department, staff, leaveByStaff, priorFinalState, preassignedAssignments = {} }) {
-  const nDays    = daysInMonth(month);
-  const dayCode   = department.day_code;
-  const nightCode = department.night_code;
-  const warnings  = [];
-
-  // state[staffId] = array of nDays codes, 1-indexed (index 0 unused)
-  const state = {};
-  for (const s of staff) {
-    state[s.id] = new Array(nDays + 1).fill(null);
-    for (let d = 1; d <= nDays; d++) {
-      const ds = dateStr(month, d);
-      if (leaveByStaff[s.id]?.has(ds)) state[s.id][d] = LEAVE;
+function leaveCodeFor(value, date) {
+  const validate = code => {
+    if (typeof code !== 'string' || !LEAVE_CODES.has(code)) {
+      throw new TypeError('Unsupported leave code "' + String(code) + '" for ' + date);
     }
+    return code;
+  };
+  if (value instanceof Set) return value.has(date) ? 'L' : null;
+  if (value instanceof Map) {
+    const code = value.get(date);
+    return code == null ? null : validate(code);
+  }
+  if (Array.isArray(value)) {
+    const item = value.find(entry => typeof entry === 'string' ? entry === date : entry?.date === date);
+    if (!item) return null;
+    const code = typeof item === 'string' ? 'L' : (item.leave_type ?? item.shift_code ?? 'L');
+    return validate(code);
+  }
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, date)) {
+    const code = value[date];
+    return code == null ? null : validate(code);
+  }
+  return null;
+}
+function isWorkCode(code) { return WORK_CODES.has(code); }
+function isDayCode(code) { return DAY_CODES.has(code); }
+function isNightCode(code) { return NIGHT_CODES.has(code); }
+function shiftType(code) {
+  if (isNightCode(code)) return 'night';
+  if (isDayCode(code)) return 'day';
+  return null;
+}
+function fixedValue(value) {
+  if (typeof value === 'string') return { shift_code: value };
+  return value && typeof value === 'object' ? value : null;
+}
+function seededRandom(seedText) {
+  let seed = 2166136261;
+  for (let i = 0; i < seedText.length; i++) {
+    seed ^= seedText.charCodeAt(i);
+    seed = Math.imul(seed, 16777619);
+  }
+  return function random() {
+    seed += 0x6D2B79F5;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * fixedAssignments: { [staffId]: { [YYYY-MM-DD]: {
+ *   shift_code, coverage_department_id?, coverage_shift_code?
+ * } } }. These are locked operational facts (training, approved relief,
+ * Field Supervisor deployment), not suggestions for the optimizer.
+ *
+ * leaveByStaff accepts legacy Sets (L) and date=>leave-code maps (L/PL/ML/SL).
+ */
+export function generateSchedule({
+  month, department, staff, leaveByStaff = {}, priorFinalState,
+  preassignedAssignments = {}, fixedAssignments = {},
+}) {
+  const nDays = daysInMonth(month);
+  const dayCode = department.day_code;
+  const nightCode = department.night_code;
+  const warnings = [];
+  const fixedConflicts = [];
+  const state = Object.create(null);
+  const assignmentMeta = Object.create(null);
+  const totals = Object.create(null);
+  const lockedAssignments = new Set();
+  const staffById = new Map(staff.map(person => [person.id, person]));
+
+  for (const person of staff) {
+    state[person.id] = new Array(nDays + 1).fill(null);
+    assignmentMeta[person.id] = Object.create(null);
+    for (let day = 1; day <= nDays; day++) {
+      const date = dateStr(month, day);
+      const leaveCode = leaveCodeFor(leaveByStaff[person.id], date);
+      if (leaveCode) state[person.id][day] = leaveCode;
+    }
+    const leaveCount = state[person.id].filter(code => code && LEAVE_CODES.has(code)).length;
+    totals[person.id] = { total: 0, night: 0, weekend: 0, leave: leaveCount, training: 0, relief: 0 };
   }
 
-  const totals = {};
-  for (const s of staff) {
-    let leaveCount = 0;
-    for (let d = 1; d <= nDays; d++) if (state[s.id][d] === LEAVE) leaveCount++;
-    totals[s.id] = { total: 0, night: 0, weekend: 0, leave: leaveCount };
+  function actualShiftCode(staffId, day) {
+    const date = dateStr(month, day);
+    return assignmentMeta[staffId][date]?.coverage_shift_code || state[staffId][day];
   }
-
-  // BUG FIX: lastWorkInfo now correctly converts the 'day'/'night' type string
-  // stored in priorFinalState.lastShift into the actual department shift code
-  // so that comparisons against state values work correctly.
   function lastWorkInfo(staffId, day) {
     if (day === 1) {
       const prior = priorFinalState?.[staffId];
-      if (!prior) return { prevCode: null, consecutiveWork: 0 };
-      // Convert the type string back to an actual code for correct comparison
-      let prevCode = null;
-      if (prior.lastShift === 'night') prevCode = nightCode;
-      else if (prior.lastShift === 'day') prevCode = dayCode;
-      return { prevCode, consecutiveWork: prior.consecutiveWork ?? 0 };
+      return { prevType: prior?.lastShift || null, consecutiveWork: prior?.consecutiveWork ?? 0 };
     }
-    const prevCode = state[staffId][day - 1];
     let consecutiveWork = 0;
-    for (let d = day - 1; d >= 1; d--) {
-      const c = state[staffId][d];
-      if (c === dayCode || c === nightCode) consecutiveWork++;
+    for (let current = day - 1; current >= 1; current--) {
+      const code = state[staffId][current];
+      if (isWorkCode(code)) consecutiveWork++;
       else break;
     }
-    return { prevCode, consecutiveWork };
+    return { prevType: shiftType(actualShiftCode(staffId, day - 1)), consecutiveWork };
   }
-
-  // night_rest_rule: 1 = enforced (ISOC), 0 = relaxed (SCE - 5 staff makes it mathematically
-  // necessary to allow consecutive night→day in some configurations)
   const nightRestRule = (department.night_rest_rule ?? 1) === 1;
 
-  function canAssign(staffId, day, shiftCode) {
-    const existing = state[staffId][day];
-    if (existing === LEAVE) return false;
-    if (existing !== null)  return false;
+  function canAssign(person, day, shiftCode) {
+    if (state[person.id][day] !== null) return false;
+    const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
+    if (nightRestRule && shiftCode === dayCode && prevType === 'night') return false;
 
-    const { prevCode, consecutiveWork } = lastWorkInfo(staffId, day);
+    // A future approved relief, rotation or Duty Ops cover is already locked
+    // in state before the allocator starts. Do not create a night immediately
+    // before fixed day activity, or a run that will exceed the limit once the
+    // future locked work is reached.
+    const nextDay = day + 1;
+    const nextDate = nextDay <= nDays ? dateStr(month, nextDay) : null;
+    const nextIsLocked = nextDate && lockedAssignments.has(person.id + ':' + nextDate);
+    const nextCode = nextIsLocked ? actualShiftCode(person.id, nextDay) : null;
+    const nextIsDayActivity = nextIsLocked
+      && (shiftType(nextCode) === 'day' || state[person.id][nextDay] === 'T');
+    if (nightRestRule && shiftCode === nightCode && nextIsDayActivity) return false;
 
-    // Rule: no Night → Day (configurable per department)
-    if (nightRestRule && shiftCode === dayCode && prevCode === nightCode) return false;
+    let futureFixedWork = 0;
+    for (let futureDay = day + 1; futureDay <= nDays; futureDay++) {
+      const futureDate = dateStr(month, futureDay);
+      if (!lockedAssignments.has(person.id + ':' + futureDate)) break;
+      if (!isWorkCode(state[person.id][futureDay])) break;
+      futureFixedWork++;
+    }
+    return consecutiveWork + 1 + futureFixedWork <= (person.max_consecutive_days ?? 5);
+  }
 
-    // Rule: max 5 consecutive working days
-    if (consecutiveWork >= (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
-
+  function canPlaceFixed(person, day, value, date) {
+    const code = value.shift_code || value.code;
+    if (typeof code !== 'string' || !['D','N','DC','NC','O','T','FSA'].includes(code)) return false;
+    const coverageCode = value.coverage_shift_code || code;
+    const type = shiftType(coverageCode);
+    const isDayActivity = type === 'day' || code === 'T';
+    if (type === 'day' && person.can_day === 0) return false;
+    if (type === 'night') {
+      const exception = Array.isArray(person.night_exception_dates) && person.night_exception_dates.includes(date);
+      if (person.can_night === 0 && !exception) return false;
+    }
+    if (state[person.id][day] !== null) return false;
+    const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
+    if (isWorkCode(code)) {
+      if (nightRestRule && isDayActivity && prevType === 'night') return false;
+      if (consecutiveWork >= (person.max_consecutive_days ?? 5)) return false;
+    }
     return true;
   }
 
-  const lockedAssignments = new Set();
-  for (const [date, staffId] of Object.entries(preassignedAssignments || {})) {
+  function applyFixed(person, date, value, sourceLabel) {
     const day = Number(date.slice(-2));
-    const person = staff.find(item => item.id === staffId);
+    if (!Number.isInteger(day) || day < 1 || day > nDays || date.slice(0, 7) !== month) {
+      fixedConflicts.push({ staff_id: person.id, date, source: sourceLabel, reason: 'Fixed assignment date is outside the requested schedule month' });
+      warnings.push(department.id + ' ' + date + ': fixed assignment is outside the requested schedule month (' + sourceLabel + ')');
+      return;
+    }
+    const fixed = fixedValue(value);
+    if (!fixed) {
+      fixedConflicts.push({ staff_id: person.id, date, source: sourceLabel, reason: 'Fixed assignment data is invalid' });
+      return;
+    }
+    const requestedCode = fixed.shift_code || fixed.code;
+    // Approved leave always supersedes an otherwise-rest day from a rotation.
+    if (LEAVE_CODES.has(state[person.id][day]) && requestedCode === OFF) return;
+    if (!canPlaceFixed(person, day, fixed, date)) {
+      fixedConflicts.push({
+        staff_id: person.id,
+        staff_name: person.name || person.id,
+        date,
+        shift_code: requestedCode || null,
+        source: fixed.assignment_source || sourceLabel,
+        reason: 'Conflicts with leave, another assignment, qualification or rest policy',
+      });
+      warnings.push(department.id + ' ' + date + ': fixed ' + (fixed.shift_code || 'assignment') +
+        ' for ' + (person.name || person.id) + ' conflicts with leave, another assignment, qualification or rest policy (' + sourceLabel + ')');
+      return;
+    }
+    const code = fixed.shift_code || fixed.code;
+    state[person.id][day] = code;
+    assignmentMeta[person.id][date] = {
+      coverage_department_id: fixed.coverage_department_id || null,
+      coverage_shift_code: fixed.coverage_shift_code || null,
+      assignment_source: fixed.assignment_source || null,
+    };
+    lockedAssignments.add(person.id + ':' + date);
+    const countsAsWork = fixed.counts_as_work !== false && isWorkCode(code);
+    if (countsAsWork) {
+      totals[person.id].total++;
+      if (isWeekend(month, day)) totals[person.id].weekend++;
+      const coveredCode = fixed.coverage_shift_code || code;
+      if (isNightCode(coveredCode)) totals[person.id].night++;
+      if (code === 'T') totals[person.id].training++;
+      if (code === 'FSA') totals[person.id].relief++;
+    }
+  }
+
+  // First apply fixed date markers and approved relief deployments.
+  for (const person of staff) {
+    const byDate = fixedAssignments?.[person.id] || {};
+    for (const [date, value] of Object.entries(byDate)) applyFixed(person, date, value, 'approved fixed assignment');
+  }
+
+  // Backward-compatible Duty Ops day cover. It is also a locked assignment.
+  for (const [date, assigned] of Object.entries(preassignedAssignments || {})) {
+    const day = Number(date.slice(-2));
+    const personId = typeof assigned === 'string' ? assigned : assigned?.staff_id;
+    const person = staffById.get(personId);
     if (!person || !Number.isInteger(day) || day < 1 || day > nDays) continue;
-    if (!canAssign(staffId, day, dayCode)) {
-      warnings.push(`${department.id} ${date}: Duty Ops preassignment for ${person.name || staffId} conflicts with availability/rest/qualification`);
+    if (state[personId][day] !== null) {
+      fixedConflicts.push({
+        staff_id: personId,
+        staff_name: person.name || personId,
+        date,
+        shift_code: dayCode,
+        source: 'duty_ops',
+        reason: 'Conflicts with another fixed assignment',
+      });
+      warnings.push(department.id + ' ' + date + ': Duty Ops preassignment for ' + (person.name || personId) + ' conflicts with another fixed assignment');
       continue;
     }
-    state[staffId][day] = dayCode;
-    totals[staffId].total++;
-    if (isWeekend(month, day)) totals[staffId].weekend++;
-    lockedAssignments.add(staffId + ':' + date);
+    applyFixed(person, date, { shift_code: dayCode, assignment_source: 'duty_ops' }, 'Duty Ops preassignment');
   }
 
+  function coverageCount(day, shiftCode) {
+    const date = dateStr(month, day);
+    return staff.reduce((count, person) => {
+      const code = state[person.id][day];
+      const coveredCode = assignmentMeta[person.id][date]?.coverage_shift_code || code;
+      return count + (coveredCode === shiftCode && (code === shiftCode || code === 'FSA') ? 1 : 0);
+    }, 0);
+  }
   function fairnessScore(staffId, shiftCode, day) {
-    const t = totals[staffId];
-    const weekendPenalty = isWeekend(month, day) ? t.weekend * 0.5 : 0;
-    const nightPenalty   = shiftCode === nightCode ? t.night * 2 : 0;
-    const leaveAdjusted  = t.total - t.leave * 0.15;
-    return leaveAdjusted + nightPenalty + weekendPenalty;
+    const tally = totals[staffId];
+    const weekendPenalty = isWeekend(month, day) ? tally.weekend * 0.5 : 0;
+    const nightPenalty = shiftCode === nightCode ? tally.night * 2 : 0;
+    return tally.total - tally.leave * 0.15 + nightPenalty + weekendPenalty;
   }
 
-  // Main pass: night first (harder constraint), then day
+  // Primary staff are allocated first. Relief-only qualifications are never
+  // used as an automatic staffing fallback; approved fixed allocations only.
   for (let day = 1; day <= nDays; day++) {
+    const date = dateStr(month, day);
     for (const shiftCode of [nightCode, dayCode]) {
       const isNight = shiftCode === nightCode;
       const min = isNight ? department.night_min : department.day_min;
-
-      const candidates = staff
-        .filter(s => (isNight ? (s.can_night !== 0 || s.night_exception_dates?.includes(dateStr(month, day))) : s.can_day !== 0) && canAssign(s.id, day, shiftCode))
-        .sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day));
-
-      if (candidates.length < min) {
-        warnings.push(
-          `${department.id} ${dateStr(month, day)}: only ${candidates.length}/${min} available for ${shiftCode} (leave/rest constraints)`
-        );
-      }
-
       const max = isNight ? (department.night_max ?? min) : (department.day_max ?? min);
-      const alreadyAssigned = staff.filter(person => state[person.id][day] === shiftCode).length;
+      const candidates = staff.filter(person => {
+        if (person.relief_only === 1 || person.relief_only === true) return false;
+        const qualified = isNight
+          ? (person.can_night !== 0 || person.night_exception_dates?.includes(date))
+          : person.can_day !== 0;
+        return qualified && canAssign(person, day, shiftCode);
+      }).sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day) || a.id.localeCompare(b.id));
+
+      const alreadyAssigned = coverageCount(day, shiftCode);
+      if (alreadyAssigned + candidates.length < min) {
+        warnings.push(department.id + ' ' + date + ': only ' + (alreadyAssigned + candidates.length) + '/' + min +
+          ' available for ' + shiftCode + ' (approved relief, qualification, leave or rest constraints)');
+      }
       const needed = Math.min(Math.max(0, max - alreadyAssigned), candidates.length);
       for (let i = 0; i < needed; i++) {
-        const s = candidates[i];
-        state[s.id][day] = shiftCode;
-        totals[s.id].total++;
-        if (isNight) totals[s.id].night++;
-        if (isWeekend(month, day)) totals[s.id].weekend++;
+        const person = candidates[i];
+        const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
+        if (nightRestRule && shiftCode === dayCode && prevType === 'night') {
+          warnings.push(department.id + ' ' + date + ': skipped ' + person.name + ' for day shift after night duty');
+          continue;
+        }
+        if (consecutiveWork >= (person.max_consecutive_days ?? 5)) {
+          warnings.push(department.id + ' ' + date + ': skipped ' + person.name + ' after maximum consecutive work days');
+          continue;
+        }
+        state[person.id][day] = shiftCode;
+        totals[person.id].total++;
+        if (isNight) totals[person.id].night++;
+        if (isWeekend(month, day)) totals[person.id].weekend++;
       }
     }
-
-    // Remaining unassigned → Off
-    for (const s of staff) {
-      if (state[s.id][day] === null) state[s.id][day] = OFF;
+    for (const person of staff) {
+      if (state[person.id][day] === null) state[person.id][day] = OFF;
     }
   }
 
-  // Local-search improvement pass
-  improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState, lockedAssignments });
+  improveBalance({
+    state, staff, totals, month, nDays, department, dayCode, nightCode,
+    priorFinalState, lockedAssignments, assignmentMeta,
+  });
 
-  const assignments = {};
-  for (const s of staff) {
-    assignments[s.id] = {};
-    for (let d = 1; d <= nDays; d++) {
-      assignments[s.id][dateStr(month, d)] = state[s.id][d];
+  const assignments = Object.create(null);
+  for (const person of staff) {
+    assignments[person.id] = Object.create(null);
+    for (let day = 1; day <= nDays; day++) {
+      assignments[person.id][dateStr(month, day)] = state[person.id][day];
     }
   }
-
-  return { assignments, warnings, totals };
+  return { assignments, assignmentMeta, warnings, totals, fixedConflicts };
 }
 
 function variance(values) {
   if (values.length === 0) return 0;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  return values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
 }
 
-function improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState, lockedAssignments = new Set() }) {
-  const ITERATIONS = 600;
-  const ids = staff.map(s => s.id);
+function improveBalance({
+  state, staff, totals, month, nDays, department, dayCode, nightCode,
+  priorFinalState, lockedAssignments = new Set(), assignmentMeta,
+}) {
+  const iterations = 600;
+  const allIds = staff.map(person => person.id);
+  const ids = staff.filter(person => !(person.relief_only === 1 || person.relief_only === true)).map(person => person.id);
+  const people = new Map(staff.map(person => [person.id, person]));
+  const random = seededRandom(month + '|' + department.id + '|' + ids.slice().sort().join('|'));
 
-  function constraintsOk(staffId, day) {
-    const lo = Math.max(1, day - 5);
-    const hi = Math.min(nDays, day + 1);
-    for (let d = lo; d <= hi; d++) {
-      const code = state[staffId][d];
-      if (code === LEAVE) continue;
-      if (code === dayCode && d === 1 && priorFinalState?.[staffId]?.lastShift === 'night') return false;
-      if (code === dayCode && d > 1 && state[staffId][d - 1] === nightCode) return false;
-      if (code === dayCode || code === nightCode) {
-        let run = 0;
-        for (let dd = d; dd >= 1 && (state[staffId][dd] === dayCode || state[staffId][dd] === nightCode); dd--) run++;
-        if (d === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
-          run += priorFinalState[staffId].consecutiveWork ?? 0;
+  function workRunValid(staffId, day) {
+    const person = people.get(staffId);
+    const low = Math.max(1, day - 5);
+    const high = Math.min(nDays, day + 1);
+    for (let current = low; current <= high; current++) {
+      const code = state[staffId][current];
+      if (LEAVE_CODES.has(code) || !isWorkCode(code)) continue;
+      const currentDate = dateStr(month, current);
+      const currentCoverage = assignmentMeta[staffId]?.[currentDate]?.coverage_shift_code || code;
+      if (shiftType(currentCoverage) === 'day' || code === 'T') {
+        let previousType = null;
+        if (current === 1) previousType = priorFinalState?.[staffId]?.lastShift || null;
+        else {
+          const previousDate = dateStr(month, current - 1);
+          previousType = shiftType(assignmentMeta[staffId]?.[previousDate]?.coverage_shift_code || state[staffId][current - 1]);
         }
-        if (run > (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
+        if ((department.night_rest_rule ?? 1) === 1 && previousType === 'night') return false;
       }
+      let run = 0;
+      for (let cursor = current; cursor >= 1; cursor--) {
+        if (!isWorkCode(state[staffId][cursor])) break;
+        run++;
+      }
+      if (current === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
+        run += priorFinalState[staffId].consecutiveWork ?? 0;
+      }
+      if (run > (person?.max_consecutive_days ?? 5)) return false;
     }
     return true;
   }
 
   function coverageOk(day, code, removeId, addId) {
     let count = 0;
-    for (const id of ids) {
-      let c = state[id][day];
-      if (id === removeId) c = OFF;
-      if (id === addId) c = code;
-      if (c === code) count++;
+    const date = dateStr(month, day);
+    for (const id of allIds) {
+      let current = state[id][day];
+      let covered = assignmentMeta[id]?.[date]?.coverage_shift_code || current;
+      if (id === removeId) { current = OFF; covered = OFF; }
+      if (id === addId) { current = code; covered = code; }
+      if (covered === code && (current === code || current === 'FSA')) count++;
     }
-    const min = code === dayCode ? department.day_min : department.night_min;
-    return count >= min;
+    const minimum = code === dayCode ? department.day_min : department.night_min;
+    return count >= minimum;
   }
 
-  for (let iter = 0; iter < ITERATIONS; iter++) {
-    const totalVar = variance(ids.map(id => totals[id].total));
-    const nightVar = variance(ids.map(id => totals[id].night));
-    const weekendVar = variance(ids.map(id => totals[id].weekend));
-    const baseVar = totalVar + nightVar * 1.5 + weekendVar * 0.5;
-    if (baseVar < 0.01) break;
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const baseVariance = variance(ids.map(id => totals[id].total))
+      + variance(ids.map(id => totals[id].night)) * 1.5
+      + variance(ids.map(id => totals[id].weekend)) * 0.5;
+    if (baseVariance < 0.01) break;
 
-    const day = 1 + Math.floor(Math.random() * nDays);
-
-    // FIX: sort by composite score rather than just total, so improvement
-    // also equalises nights and weekends, not just total shifts.
+    const day = 1 + Math.floor(random() * nDays);
     const scored = ids.map(id => ({
       id,
       score: totals[id].total + totals[id].night * 0.5 + totals[id].weekend * 0.25,
-    })).sort((a, b) => b.score - a.score);
-
+    })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    if (scored.length < 2) break;
     const busy = scored[0].id;
     const free = scored[scored.length - 1].id;
     if (busy === free) continue;
@@ -247,42 +400,38 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
     const freeCode = state[free][day];
     const date = dateStr(month, day);
     if (lockedAssignments.has(busy + ':' + date) || lockedAssignments.has(free + ':' + date)) continue;
-
     if ((busyCode !== dayCode && busyCode !== nightCode) || freeCode !== OFF) continue;
-    const freePerson = staff.find(person => person.id === free);
-    if (busyCode === dayCode && freePerson?.can_day === 0) continue;
-    if (busyCode === nightCode && freePerson?.can_night === 0 && !freePerson?.night_exception_dates?.includes(dateStr(month, day))) continue;
 
-    // Attempt swap
+    const freePerson = people.get(free);
+    if (freePerson?.relief_only === 1 || freePerson?.relief_only === true) continue;
+    if (busyCode === dayCode && freePerson?.can_day === 0) continue;
+    if (busyCode === nightCode && freePerson?.can_night === 0 && !freePerson?.night_exception_dates?.includes(date)) continue;
+
     state[busy][day] = OFF;
     state[free][day] = busyCode;
-
-    if (!constraintsOk(busy, day) || !constraintsOk(free, day) || !coverageOk(day, busyCode, busy, free)) {
+    if (!workRunValid(busy, day) || !workRunValid(free, day) || !coverageOk(day, busyCode, busy, free)) {
       state[busy][day] = busyCode;
       state[free][day] = freeCode;
       continue;
     }
 
-    // Update totals tentatively
     totals[busy].total--;
     totals[free].total++;
     const isNight = busyCode === nightCode;
-    const isWknd  = isWeekend(month, day);
-    if (isNight)  { totals[busy].night--;  totals[free].night++; }
-    if (isWknd)   { totals[busy].weekend--; totals[free].weekend++; }
+    const isWeekendDay = isWeekend(month, day);
+    if (isNight) { totals[busy].night--; totals[free].night++; }
+    if (isWeekendDay) { totals[busy].weekend--; totals[free].weekend++; }
 
-    const newVar = variance(ids.map(id => totals[id].total))
-                 + variance(ids.map(id => totals[id].night)) * 1.5
-                 + variance(ids.map(id => totals[id].weekend)) * 0.5;
-
-    if (newVar >= baseVar) {
-      // Revert
-      state[busy][day]  = busyCode;
-      state[free][day]  = freeCode;
+    const nextVariance = variance(ids.map(id => totals[id].total))
+      + variance(ids.map(id => totals[id].night)) * 1.5
+      + variance(ids.map(id => totals[id].weekend)) * 0.5;
+    if (nextVariance >= baseVariance) {
+      state[busy][day] = busyCode;
+      state[free][day] = freeCode;
       totals[busy].total++;
       totals[free].total--;
-      if (isNight)  { totals[busy].night++;  totals[free].night--; }
-      if (isWknd)   { totals[busy].weekend++; totals[free].weekend--; }
+      if (isNight) { totals[busy].night++; totals[free].night--; }
+      if (isWeekendDay) { totals[busy].weekend++; totals[free].weekend--; }
     }
   }
 }

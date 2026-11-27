@@ -122,3 +122,221 @@ test('approved Duty Ops team-cover assignment is fixed in the generated roster',
   });
   assert.equal(result.assignments.s0['2026-07-01'], 'D');
 });
+
+test('reference roster preserves typed leave, trainee time and Field Supervisor relief', () => {
+  const staff = [
+    { id: 'alpha', name: 'Alpha', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    { id: 'trainee', name: 'Trainee', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    { id: 'field', name: 'Clinton Juma', can_day: 1, can_night: 1, max_consecutive_days: 5, relief_only: 1 },
+  ];
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 1, night_max: 1, night_rest_rule: 1 },
+    staff,
+    leaveByStaff: { alpha: new Map([['2026-12-04', 'PL'], ['2026-12-05', 'ML'], ['2026-12-06', 'SL']]) },
+    fixedAssignments: {
+      trainee: { '2026-12-04': { shift_code: 'T' } },
+      field: { '2026-12-05': { shift_code: 'FSA', coverage_department_id: 'ISOC', coverage_shift_code: 'N' } },
+    },
+  });
+  assert.equal(result.assignments.alpha['2026-12-04'], 'PL');
+  assert.equal(result.assignments.alpha['2026-12-05'], 'ML');
+  assert.equal(result.assignments.alpha['2026-12-06'], 'SL');
+  assert.equal(result.assignments.trainee['2026-12-04'], 'T');
+  assert.equal(result.assignments.field['2026-12-05'], 'FSA');
+  assert.equal(result.assignmentMeta.field['2026-12-05'].coverage_shift_code, 'N');
+  assert.ok(result.totals.trainee.total >= 1, 'training counts as working time');
+  assert.ok(result.totals.field.relief >= 1, 'Field Supervisor duty is reported separately');
+});
+
+test('relief-only cross-qualified staff are never used for routine fallback', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'primary', can_day: 0, can_night: 0, relief_only: 0 },
+      { id: 'borrowed', can_day: 1, can_night: 1, relief_only: 1 },
+    ],
+  });
+  assert.equal(result.assignments.borrowed['2026-12-01'], 'O');
+  assert.ok(result.warnings.some(warning => warning.includes('0/1 available')));
+});
+
+test('fixed relief allocation is explicit and prevents a second regular shift on that date', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0 },
+    staff: [
+      { id: 'primary', can_day: 1, can_night: 1 },
+      { id: 'borrowed', can_day: 1, can_night: 1, relief_only: 1 },
+    ],
+    fixedAssignments: { borrowed: { '2026-12-01': { shift_code: 'D', coverage_department_id: 'ISOC', coverage_shift_code: 'D' } } },
+  });
+  assert.equal(result.assignments.borrowed['2026-12-01'], 'D');
+  assert.equal(result.assignments.primary['2026-12-01'], 'O');
+});
+
+test('balancing never converts an off-day on a relief-only colleague into routine coverage', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'primary-a', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'primary-b', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'relief-only', can_day: 1, can_night: 1, relief_only: 1, max_consecutive_days: 5 },
+    ],
+  });
+  for (const code of Object.values(result.assignments['relief-only'])) assert.equal(code, 'O');
+});
+
+test('rotation fixed assignments preserve a full anchored cycle, including locked off days', () => {
+  const cycle = ['D','D','N','N','O','O','O'];
+  const fixedAssignments = { alpha: Object.create(null) };
+  for (let day = 1; day <= 14; day++) {
+    const date = '2026-12-' + String(day).padStart(2, '0');
+    fixedAssignments.alpha[date] = {
+      shift_code: cycle[(day - 1) % cycle.length],
+      assignment_source: 'rotation',
+    };
+  }
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1, max_consecutive_days: 5 }],
+    fixedAssignments,
+  });
+  for (let day = 1; day <= 14; day++) {
+    const date = '2026-12-' + String(day).padStart(2, '0');
+    assert.equal(result.assignments.alpha[date], cycle[(day - 1) % cycle.length]);
+    if (day !== 5 && day !== 6 && day !== 7 && day !== 12 && day !== 13 && day !== 14) {
+      assert.equal(result.assignmentMeta.alpha[date].assignment_source, 'rotation');
+    }
+  }
+});
+
+test('approved leave supersedes a locked rotation rest day without a warning', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0 },
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-05', 'PL']]) },
+    fixedAssignments: { alpha: { '2026-12-05': { shift_code: 'O', assignment_source: 'rotation' } } },
+  });
+  assert.equal(result.assignments.alpha['2026-12-05'], 'PL');
+  assert.ok(!result.warnings.some(warning => warning.includes('2026-12-05')));
+});
+
+
+test('trainee day marker obeys night-to-day recovery across the month boundary', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [{ id: 'trainee', name: 'Trainee', can_day: 1, can_night: 1, max_consecutive_days: 5 }],
+    priorFinalState: { trainee: { lastShift: 'night', consecutiveWork: 1 } },
+    fixedAssignments: { trainee: { '2026-12-01': { shift_code: 'T' } } },
+  });
+  assert.equal(result.assignments.trainee['2026-12-01'], 'O');
+  assert.ok(result.warnings.some(warning => warning.includes('fixed T') && warning.includes('rest policy')));
+});
+
+
+test('allocator skips a night-to-day-ineligible first candidate and fills with a compliant colleague', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-night', name: 'After night', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    priorFinalState: { 'a-night': { lastShift: 'night', consecutiveWork: 1 } },
+  });
+  assert.equal(result.assignments['a-night']['2026-12-01'], 'O');
+  assert.equal(result.assignments['b-ready']['2026-12-01'], 'D');
+  assert.ok(!result.warnings.some(warning => warning.includes('only 0/1 available')));
+});
+
+test('allocator excludes a worker already at the consecutive-work maximum before computing coverage', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'SCE', day_code: 'DC', night_code: 'NC', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-maxed', name: 'Maxed worker', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    priorFinalState: { 'a-maxed': { lastShift: 'day', consecutiveWork: 5 } },
+  });
+  assert.equal(result.assignments['a-maxed']['2026-12-01'], 'O');
+  assert.equal(result.assignments['b-ready']['2026-12-01'], 'DC');
+  assert.ok(!result.warnings.some(warning => warning.includes('only 0/1 available')));
+});
+
+
+test('allocator reserves recovery before a future fixed day relief assignment', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'SCE', day_code: 'DC', night_code: 'NC', day_min: 1, day_max: 1, night_min: 1, night_max: 1, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-relief', name: 'Relief controller', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    fixedAssignments: {
+      'a-relief': {
+        '2026-12-18': {
+          shift_code: 'FSA',
+          coverage_department_id: 'ISOC',
+          coverage_shift_code: 'D',
+          assignment_source: 'relief',
+        },
+      },
+    },
+  });
+  assert.notEqual(result.assignments['a-relief']['2026-12-17'], 'NC',
+    'a night before a locked daytime relief assignment must be excluded');
+  assert.equal(result.assignments['b-ready']['2026-12-17'], 'NC',
+    'the allocator should use a compliant alternative when one exists');
+  assert.equal(result.assignments['a-relief']['2026-12-18'], 'FSA');
+});
+
+test('allocator reserves consecutive-work capacity before future locked work', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-reserved', name: 'Reserved controller', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    fixedAssignments: {
+      'a-reserved': { '2026-12-18': { shift_code: 'D', assignment_source: 'relief' } },
+    },
+    priorFinalState: { 'a-reserved': { lastShift: 'day', consecutiveWork: 4 } },
+  });
+  assert.equal(result.assignments['a-reserved']['2026-12-17'], 'O',
+    'the prior streak plus 17th and 18th would exceed five consecutive days');
+  assert.equal(result.assignments['b-ready']['2026-12-17'], 'D');
+});
+
+
+test('unknown leave codes are rejected instead of being silently rewritten as generic leave', () => {
+  assert.throws(() => generateSchedule({
+    month: '2026-12',
+    department: dept,
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-03', 'UNKNOWN']]) },
+  }), /Unsupported leave code "UNKNOWN"/);
+});
+
+test('a locked rotation conflict is returned as a hard fixed-assignment conflict', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { ...dept, day_min: 0, day_max: 0, night_min: 0, night_max: 0 },
+    staff: [{ id: 'alpha', name: 'Alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-03', 'SL']]) },
+    fixedAssignments: {
+      alpha: { '2026-12-03': { shift_code: 'D', assignment_source: 'rotation' } },
+    },
+  });
+  assert.equal(result.assignments.alpha['2026-12-03'], 'SL');
+  assert.equal(result.fixedConflicts.length, 1);
+  assert.equal(result.fixedConflicts[0].source, 'rotation');
+  assert.equal(result.fixedConflicts[0].date, '2026-12-03');
+});

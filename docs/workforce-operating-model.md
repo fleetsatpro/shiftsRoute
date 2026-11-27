@@ -1,6 +1,6 @@
 # ROC Workforce Operating Model
 
-Status: implementation and release specification for PR #2. The workforce schema, core Worker APIs, solver eligibility controls, HR workspace and Duty Ops workspace are implemented on the feature branch. Production migration and deployment remain separate release steps.
+Status: reference-roster implementation and release specification for draft PR #5. The code, migration 0007 and regression tests are on feat/reference-driven-roster-relief-model. Production D1 remains at migrations 0001–0006; migration 0007, credential changes and Worker deployment remain separate release steps.
 
 ## Product goals
 
@@ -42,10 +42,13 @@ Changes to qualifications are effective-dated so historical schedules remain exp
 - Hilda and Mukasa: Duty Ops Managers with full administrative rights and senior operational authority over all controllers; rotate daily day-duty fairly. Both may cover day shortages in ISOC or SCE when qualified and available.
 - Wayne: Technical Assistant; eligible for configured cross-team shortage support. Night work is disabled by default and only possible through a recorded emergency exception with authorized approval.
 - Mercy Wanyoike: individual HR account and HR workspace; not an ISOC roster member.
+- Mercy Dorice: distinct operational ISOC employee; never conflate her account with Mercy Wanyoike.
 - Cate and Oliera: ISOC staff.
-- Benson and Joan: add SCE qualification for rotation/shortage support while preserving their home department.
-- David: deactivate account and remove from future eligibility; preserve historical schedule/audit references.
-- HR: Mercy Wanyoike is the named HR account holder. Create an individual account and HR workspace; never create a shared generic HR credential.
+- Benson and Joan: preserve their home-team membership; SCE qualifications are relief-only, not a normal SCE staffing pool.
+- All active SCE staff receive an ISOC relief-only qualification; the qualification workflow applies this to future SCE hires.
+- Clinton Juma: Field Supervisor, relief-capable for either desk on day or night; only approved deployments appear as FSA.
+- David: account inactive with employment end date 2026-11-30; preserve historical schedule/audit references.
+- HR: Mercy Wanyoike is the named HR account holder. Never create a shared generic HR credential.
 
 Existing Stephen and Murad administrator grants require an explicit least-privilege review. Do not silently retain or revoke either grant as a side effect of this migration.
 
@@ -78,8 +81,10 @@ The optimizer must report infeasibility and explain the smallest shortage set ra
 - DOMs have authority level 900; Griffin has platform-owner level 1000. DOMs cannot modify accounts at or above their own authority.
 - The monthly Duty Ops rota balances manager duty counts and cross-team shortage coverage. Uncovered dates are explicit exceptions, never fabricated assignments.
 - Team-cover Duty Ops assignments are locked into future generated department rosters; the solver preserves these fixed assignments.
-- Cross-qualified staff are included once per department and can only receive shift types enabled by their effective qualification and shift policy.
-- Wayne's Technical Assistant role is day-only. Night work requires a date-specific exception requested with a reason and approved by a different authorized reviewer.
+- Cross-qualified staff have effective-dated relief-only qualifications and are excluded from routine staffing pools and balancing. They enter a generated schedule only through an approved, date-specific relief assignment after a verified receiving-desk minimum shortage.
+- Wayne is day-only for routine work. A night assignment requires the separately recorded emergency exception requested with a reason and approved by a different authorized reviewer.
+- Cross-desk relief is checked across the employee's latest home/receiving desk schedules for same-date conflicts, night-to-day recovery, active rotation and maximum consecutive work days.
+- Typed leave (PL/ML/SL), general L, T, and FSA are stored and rendered as distinct states. Unknown codes are never coerced to Off.
 - HR can onboard operational staff, manage leave, record qualifications and configure per-person shift policies. New employees have no scheduling qualification until HR records verified eligibility.
 - David is deactivated and sessions are revoked; historical schedule records remain intact.
 
@@ -104,3 +109,35 @@ No green or green-adjacent accent palette. Use a premium midnight/graphite found
 - Browser tests at desktop and mobile sizes for all role workspaces.
 - Real Worker + isolated D1 integration tests for enrollment, sign-in, staff changes, schedule generation, exception approvals and audit records.
 - Production D1 migration, credential issuance, and deployment remain separate explicit release steps.
+
+## Reference roster semantics and exceptional relief (November 2026)
+
+### Shift-code catalogue
+
+| Code | Meaning | Scheduling treatment |
+|---|---|---|
+| D / N | ISOC day / night | Ordinary ISOC coverage |
+| DC / NC | SCE/SCM day / night | Ordinary SCE/SCM coverage |
+| O | Off | Rest day; not work or coverage |
+| PL / ML / SL | Paternity / maternity / sick leave | Typed leave; never coerced to Off |
+| L | General or legacy leave | Leave; retained for historical rows |
+| T | Fresh trainee | Supervised training/work time; not independent desk coverage |
+| FSA | Field Supervisor assignment | Clinton Juma's visible deployment code; actual target desk and shift stored separately |
+
+Unknown shift codes must remain visibly unknown and trigger data-quality attention. They must never be converted to O.
+
+### Cross-qualification and strict shortage relief
+
+- Mercy Dorice is a distinct operational ISOC employee; Mercy Wanyoike remains the separate HR account and is never placed on the operational roster.
+- Joan, Benson, Wayne and Mercy Dorice are cross-qualified for SCE/SCM. Their SCE qualifications are relief-only and do not make them part of the normal SCE allocation pool.
+- Every active SCE employee is cross-qualified for ISOC through a relief-only qualification. New SCE hires receive the same effective-dated relief qualification at onboarding.
+- SCE staff are not an ISOC fallback pool. An ISOC relief request is rejected unless an existing receiving-desk roster proves that the selected day/night shift is below its configured minimum. Pending and approved requests count against the remaining shortage, and database capacity triggers prevent concurrent requests from overfilling the same shortfall.
+- A separate Duty Ops Manager or the platform administrator must approve each dated deployment. A requester cannot approve their own request. The reason, shortage count, minimum headcount, reviewer and review timestamp are retained.
+- The person must be active, effectively qualified for the receiving shift, not on leave or trainee duty, not scheduled elsewhere that date, and compliant with their current night-work policy. Wayne's night duty still requires the separately approved emergency exception.
+- A cross-desk assignment is mirrored on the receiving roster and the person's home-team view, but is counted as coverage only once in the receiving department. The underlying target desk and day/night code are retained even when the visible display code is FSA.
+- Clinton Juma is configured as Field Supervisor, relief-capable for either desk, for day or night. He is not a routine staffing candidate. Only his independently approved relief deployment uses FSA.
+- Mercy Wanyoike can record PL, ML and SL for operational employees. Training is recorded as T, with a supervisor/purpose note. Leave, training and relief are mutually exclusive for the same person/date.
+- David's employment ends 30 November 2026. His account is inactive for forward scheduling; past schedule and audit rows remain available for historical reference.
+
+The relief workflow is deliberately gated: generate the receiving desk's baseline roster, identify an actual minimum-headcount shortfall, submit a reasoned dated request, obtain independent approval, then regenerate the receiving and home-team rosters. A skill preference or convenience alone is not sufficient grounds to borrow an SCE employee for ISOC.
+- Duty Ops Managers are excluded from ordinary solver candidate pools. A manager appears on an operational desk roster only when the published/assigned Duty Ops rota explicitly names that manager and receiving desk for that date; those fixed cover days are locked against optimization and manual override.

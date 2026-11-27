@@ -5,6 +5,14 @@ Cloudflare Workers + D1.
 
 ---
 
+## Current rollout — 27 November 2026
+
+The production Worker has the authentication/PBKDF2 compatibility correction and the
+production D1 database has migrations 0001–0006 recorded. The reference-roster changes
+in PR #5 add migration 0007 and are still awaiting validation and explicit release
+approval. Do not apply 0007 to production, merge this PR, or deploy the branch as part
+of routine review.
+
 ## What's new (production build)
 
 ### Bug fixes
@@ -40,6 +48,11 @@ Cloudflare Workers + D1.
 | **Health endpoint** | `GET /api/health` — useful for uptime monitoring. |
 | **`department_id` on schedules** | Migration `0003_prod.sql` adds this column so dept-filtered queries work. |
 | **Role-based department lock** | Staff are locked to their own department; admins can switch freely. |
+| **Typed roster codes** | D/N for ISOC, DC/NC for SCE/SCM, plus O, L, PL, ML, SL, T and FSA as distinct states. |
+| **Shortage-only cross-desk relief** | A date-bound, reasoned request requires a real baseline shortage and approval by a different DOM/admin. |
+| **Field Supervisor coverage** | FSA displays the Field Supervisor deployment while preserving the receiving desk and shift code. |
+| **Effective rotations** | HR can configure anchored, date-effective shift cycles which the solver preserves. |
+| **Personal cross-desk roster** | Staff can see approved relief and receiving-desk details without access to the full receiving-team roster. |
 
 ---
 
@@ -59,9 +72,11 @@ The existing production database is **`raw-ter-shift`**. Its ID is configured in
 another Cloudflare account.
 
 The isolated non-production database is **`raw-ter-shift-preview`**. The
-`routesa` and `shiftsroutes` preview configurations both bind to this database.
-The five repository migrations have been applied there and recorded in
-`d1_migrations`. The production database has deliberately been left untouched.
+`routesa` and `shiftsroutes` preview configurations bind to this database.
+Always inspect its `d1_migrations` table before applying a migration. CI also
+runs every migration against a fresh local D1 database. The production database
+is **not** untouched: migrations 0001–0006 have already been applied to
+`raw-ter-shift`; PR #5's migration 0007 is not yet released.
 
 Non-production Workers Builds upload unpublished versions using
 `wrangler.routesa.preview.toml` or `wrangler.shiftsroutes.preview.toml`.
@@ -95,14 +110,16 @@ and reconcile the baseline before using `migrations apply`. Do not replay 0001�
 against populated tables. The repository cannot determine whether a remote database
 has already had those SQL files applied.
 Migration 0004 adds one-time enrollment, salted PBKDF2 PIN storage and login
-throttling. Existing legacy SHA-256 PINs are upgraded after the next successful
-login. Migration 0005 seeds Patrick after the auth columns exist.
+throttling. Migration 0005 adds the original seeded account. Migration 0006 adds
+the data-driven workforce roles, qualifications, shift policies and Duty Ops rota.
+Migration 0007 (in PR #5) adds typed leave/trainee/FSA semantics, effective
+relief-only qualifications, audited shortage-bound cross-desk deployments,
+personal cross-desk roster data and workforce rotation support.
 
-The preview database has been initialized with migrations 0001–0005 and
-verified to contain 16 seeded staff across ISOC and SCE, the expected auth and
-scheduling tables, and migration records for all five files. The production
-database remains uninitialized; do not apply the remote migration command until
-the release has been explicitly authorized.
+Production D1 raw-ter-shift has migrations 0001–0006 recorded. Migration
+0007 is pending review and must only be applied after the PR is validated and
+the release is explicitly authorized. Never replay the earlier migrations
+against populated production tables.
 
 Set the Worker secret `INITIAL_ADMIN_ENROLLMENT_SECRET` before first use. Use a
 long random secret (at least 32 random bytes) and deliver it securely to the
@@ -130,11 +147,15 @@ wrangler deploy
 3. Click **Generate** → the solver fills the roster.
 4. Review the **Team Grid** — coverage warnings appear in the red banner;
    the coverage row shows day/night headcounts per day.
-5. Click any cell to cycle it manually (D → N → O → L). Overridden cells are
-   outlined in amber.
-6. When satisfied, click **Publish** to lock the schedule as the continuity
-   baseline for next month.
-7. Use **Export CSV** to download the schedule for printing.
+5. Use typed leave (PL/ML/SL or general L), training (T), and the effective
+   rotation controls where required. These states remain distinct from Off.
+6. For cross-desk relief, generate the receiving desk's baseline first. A request
+   is accepted only when the selected day/night minimum has a real shortfall;
+   a different authorized reviewer must approve it.
+7. Re-generate the affected home and receiving desk drafts, review the coverage
+   warnings and the relief metadata, then publish only after the schedule is
+   operationally verified.
+8. Use **Export CSV** to download the schedule for printing.
 
 ### PIN management
 
@@ -175,7 +196,12 @@ requests and approve or reject them from the same tab.
 | POST | `/api/schedules/generate` | **admin** | Generate schedule |
 | GET | `/api/schedules` | session | List schedules (`?month=`, `?department=`) |
 | GET | `/api/schedules/:id` | session | Schedule + assignments |
-| GET | `/api/schedules/:id/mine` | session | My shifts + co-workers |
+| GET | `/api/schedules/:id/mine` | session | My shifts + co-workers for a desk-qualified roster |
+| GET | `/api/workforce/my-roster?month=` | session | Personal roster, including approved cross-desk relief |
+| GET/POST | `/api/workforce/relief-assignments` | DOM/admin | Request/list shortage-bound relief |
+| PATCH | `/api/workforce/relief-assignments/:id` | DOM/admin | Independently approve/reject relief |
+| GET/POST | `/api/workforce/staff-markers` | HR/DOM/admin | Record/list supervised trainee assignments |
+| GET/POST | `/api/workforce/rotation-patterns` | HR/DOM/admin | Manage anchored employee rotations |
 | PATCH | `/api/schedules/:id/assignment` | **admin** | Manual override |
 | POST | `/api/schedules/:id/publish` | **admin** | Publish |
 | GET | `/api/schedules/:id/export` | session | Download CSV |
@@ -203,9 +229,11 @@ requests and approve or reject them from the same tab.
 - Non-production Workers Builds upload unpublished versions to `routesa` and
   `shiftsroutes` using isolated preview D1 configuration; no branch build
   deploys traffic or writes to the production database.
-- Production D1 `raw-ter-shift` is configured but has not been migrated.
-  Production deployment triggers remain attached to `main`; do not merge or
-  push to `main` until the production release is approved.
+- Production D1 `raw-ter-shift` has migrations 0001–0006 applied. Migration
+  0007 is pending explicit release approval.
+- Default-branch Workers Builds are production release triggers. Review this PR
+  and its database migration plan before merging; no production migration,
+  credential issuance or Worker deployment is performed by this branch.
 
 ## Required environment configuration
 
