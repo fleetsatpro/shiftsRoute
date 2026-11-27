@@ -609,8 +609,10 @@ async function loadHRWorkspace() {
     <tr><td>${escHtml(person.name)}</td><td>${escHtml(person.department_id)}</td>
     <td>${escHtml(person.role)}</td><td>${person.pin_set ? 'Enrolled' : 'Pending'}</td>
     <td>${person.active ? 'Active' : 'Inactive'}</td></tr>`).join('');
-  const eligibleIds = new Set(qualifications.map(qualification => qualification.staff_id));
-  const operationalStaff = staff.filter(person => person.active && eligibleIds.has(person.id));
+  const operationalDepartments = new Set(overview.departments.map(department => department.id));
+  const qualifiedStaffIds = new Set(qualifications.map(qualification => qualification.staff_id));
+  const operationalStaff = staff.filter(person => person.active
+    && (operationalDepartments.has(person.department_id) || qualifiedStaffIds.has(person.id)));
   const departmentOptions = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   el('hrQualDept').innerHTML = departmentOptions;
   el('hrNewDepartment').innerHTML = departmentOptions;
