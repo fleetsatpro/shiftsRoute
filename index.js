@@ -447,7 +447,13 @@ export default {
           if (swap.from_staff_id !== me.id && !isAdmin) {
             return json({ error: 'Cannot cancel another staff member\'s request' }, { status: 403 });
           }
-          await env.DB.prepare('DELETE FROM swap_requests WHERE id = ?').bind(swapId).run();
+          // Completed/rejected requests are audit records and cannot be removed.
+          const removed = await env.DB.prepare(
+            "DELETE FROM swap_requests WHERE id = ? AND status = 'pending'"
+          ).bind(swapId).run();
+          if (!removed.meta?.changes) {
+            return json({ error: 'Only pending swap requests can be cancelled' }, { status: 409 });
+          }
           return json({ deleted: true });
         }
       }
@@ -704,7 +710,7 @@ export default {
       console.error(err);
       // In production, don't leak stack traces
       return json({
-        error: err.message || 'Internal server error',
+        error: env.ENVIRONMENT === 'development' ? (err.message || 'Internal server error') : 'Internal server error',
         ...(env.ENVIRONMENT === 'development' ? { stack: err.stack } : {}),
       }, { status: 500 });
     }
