@@ -413,8 +413,9 @@ export default {
         const denied = requireAnyPermission('staff.lifecycle');
         if (denied) return denied;
         const body = await request.json();
-        if (typeof body.name !== 'string' || body.name.trim().length < 2 || body.name.length > 120
-          || !['ISOC','SCE'].includes(body.department_id)) return json({ error: 'Valid name and operational department are required' }, { status: 400 });
+        if (typeof body.name !== 'string' || body.name.trim().length < 2 || body.name.length > 120) return json({ error: 'Valid employee name is required' }, { status: 400 });
+        const homeDepartment = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
+        if (!homeDepartment) return json({ error: 'A valid operational home department is required' }, { status: 400 });
         const id = (body.id || body.name.toLowerCase().trim().replace(/\\s+/g,'-').replace(/[^a-z0-9-]/g,'')).slice(0,80);
         if (!/^[a-z0-9_-]{1,80}$/.test(id)) return json({ error: 'Invalid staff identifier' }, { status: 400 });
         await env.DB.batch([
@@ -475,7 +476,8 @@ export default {
         const id = body.id || body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         const role = ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff';
         if (me.role !== 'admin' && ['admin','duty_ops_manager'].includes(role)) return json({ error: 'Only the platform administrator can create platform administrators or peer Duty Ops Managers' }, { status: 403 });
-        if (!['ISOC','SCE','ROC','HR'].includes(body.department_id)) return json({ error: 'Unknown department' }, { status: 400 });
+        const selectedDepartment = await env.DB.prepare('SELECT id FROM departments WHERE id = ?').bind(body.department_id).first();
+        if (!selectedDepartment) return json({ error: 'Unknown department' }, { status: 400 });
         await env.DB.batch([
           env.DB.prepare('INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)').bind(id, body.name, body.department_id, role),
           env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
