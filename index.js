@@ -174,7 +174,9 @@ export default {
 
       if (pathname === '/api/auth/me' && request.method === 'GET') {
         if (!me) return json({ error: 'Not signed in' }, { status: 401 });
-        return json({ ...me, permissions: permissionRows.map(row => row.permission), authority_level: await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first().then(row => row?.authority_level ?? 0) });
+        const { results: mePermissions } = await env.DB.prepare('SELECT permission FROM role_permissions WHERE role = ?').bind(me.role).all();
+        const authority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+        return json({ ...me, permissions: mePermissions.map(row => row.permission), authority_level: authority?.authority_level ?? 0 });
       }
 
       if (!me) return json({ error: 'Sign in required' }, { status: 401 });
