@@ -551,12 +551,15 @@ async function cancelSwap(id) {
 
 // ── Workforce workspaces ──────────────────────────────────
 async function loadHRWorkspace() {
-  const [staff, qualifications] = await Promise.all([
+  const month = el('month')?.value || todayMonth();
+  const [staff, qualifications, leave] = await Promise.all([
     api('/hr/staff'),
     api('/workforce/qualifications'),
+    api('/leave?month=' + encodeURIComponent(month)),
   ]);
   state.hrStaff = staff;
   state.hrQualifications = qualifications;
+  state.hrLeave = leave;
   el('hrActiveCount').textContent = staff.filter(person => person.active).length;
   el('hrPendingCount').textContent = staff.filter(person => person.active && !person.pin_set).length;
   el('hrQualificationCount').textContent = qualifications.filter(q => !q.effective_to).length;
@@ -564,9 +567,11 @@ async function loadHRWorkspace() {
     <tr><td>${escHtml(person.name)}</td><td>${escHtml(person.department_id)}</td>
     <td>${escHtml(person.role)}</td><td>${person.pin_set ? 'Enrolled' : 'Pending'}</td>
     <td>${person.active ? 'Active' : 'Inactive'}</td></tr>`).join('');
+  const operationalStaff = staff.filter(person => person.active && ['ISOC','SCE'].includes(person.department_id));
   const select = el('hrQualStaff');
-  select.innerHTML = staff.filter(person => person.active && ['ISOC','SCE'].includes(person.department_id))
-    .map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  select.innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
   el('hrQualificationRows').innerHTML = qualifications.map(q => `
     <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_name)}
     <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''} · from ${escHtml(q.effective_from)}${q.effective_to ? ' · to ' + escHtml(q.effective_to) : ' · current'}</span></div>`).join('') || '<p class="muted">No verified qualifications recorded.</p>';
@@ -606,7 +611,10 @@ async function saveHrQualification(event) {
 async function loadDutyWorkspace() {
   const overview = await api('/workforce/overview');
   const month = el('month').value || todayMonth();
-  const rota = await api('/workforce/duty-rota?month=' + encodeURIComponent(month));
+  const [rota, exceptions] = await Promise.all([
+    api('/workforce/duty-rota?month=' + encodeURIComponent(month)),
+    api('/workforce/shift-exceptions?month=' + encodeURIComponent(month)),
+  ]);
   const managers = overview.staff.filter(person => person.active && person.role === 'duty_ops_manager');
   el('dutyManagerCount').textContent = managers.length;
   el('dutyAssignedCount').textContent = rota.filter(item => item.manager_staff_id).length;
@@ -617,6 +625,30 @@ async function loadDutyWorkspace() {
   el('workforceCoverage').innerHTML = overview.qualifications.map(q => `
     <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_id)}
     <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''}</span></div>`).join('');
+  el('dutyExceptions').innerHTML = exceptions.map(item => `
+    <div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.date)} · ${escHtml(item.shift_code)}
+    <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
+    ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
+}
+
+async function saveHrLeave(event) {
+  event.preventDefault();
+  const payload = { staff_id: el('hrLeaveStaff').value, date: el('hrLeaveDate').value, status: el('hrLeaveStatus').value };
+  try {
+    await api('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Leave record saved.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function reviewShiftException(id, status) {
+  const action = status === 'approved' ? 'approve' : 'reject';
+  if (!confirm(`Are you sure you want to ${action} this emergency night-shift request?`)) return;
+  try {
+    await api('/workforce/shift-exceptions/' + encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+    await loadDutyWorkspace();
+    toast('Exception ' + status + '.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
 }
 
 async function generateDutyWorkspaceRota() {
@@ -1154,6 +1186,11 @@ function init() {
   el('hrConfirmAdd').addEventListener('click', addHrEmployee);
   el('hrAddModal').addEventListener('click', e => { if (e.target === el('hrAddModal')) closeModal('hrAddModal'); });
   el('hrQualificationForm').addEventListener('submit', saveHrQualification);
+  el('hrLeaveForm').addEventListener('submit', saveHrLeave);
+  el('dutyExceptions').addEventListener('click', event => {
+    const button = event.target.closest('[data-exception-action]');
+    if (button) reviewShiftException(button.dataset.exceptionId, button.dataset.exceptionAction);
+  });
   el('generateDutyRota').addEventListener('click', generateDutyWorkspaceRota);
 
   // Staff directory search filters the currently loaded department roster.
