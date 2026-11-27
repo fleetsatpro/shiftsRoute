@@ -218,7 +218,7 @@ export default {
         }
         return null;
       }
-      async function validateReliefAssignment(input, ignoreId = null) {
+      async function validateReliefAssignment(input, ignoreId = null, verifyShortage = false) {
         const { staff_id, duty_date, target_department_id, shift_code } = input;
         const display_code = input.display_code || shift_code;
         if (typeof staff_id !== 'string' || !isValidCalendarDate(duty_date)
@@ -231,7 +231,7 @@ export default {
           return { ok: false, status: 400, error: 'Use the target desk shift code; FSA is reserved for an approved Field Supervisor deployment' };
         }
         const targetDepartment = await env.DB.prepare(
-          'SELECT id, day_code, night_code FROM departments WHERE id = ? AND operational_team = 1'
+          'SELECT id, day_code, night_code, day_min, night_min FROM departments WHERE id = ? AND operational_team = 1'
         ).bind(target_department_id).first();
         if (!targetDepartment || ![targetDepartment.day_code, targetDepartment.night_code].includes(shift_code)) {
           return { ok: false, status: 400, error: 'The selected shift code does not belong to the target desk' };
@@ -303,7 +303,27 @@ export default {
             return { ok: false, status: 409, error: 'The employee is already rostered for another assignment on this date; resolve the existing roster before approving relief' };
           }
         }
-        return { ok: true, person, qualification, targetDepartment, display_code };
+        let shortage = null;
+        if (verifyShortage) {
+          const baseline = await env.DB.prepare(
+            'SELECT id FROM schedules WHERE month=? AND department_id=? ORDER BY generated_at DESC LIMIT 1'
+          ).bind(duty_date.slice(0,7), target_department_id).first();
+          if (!baseline) {
+            return { ok: false, status: 409, error: 'Generate the receiving desk roster first so an actual coverage shortage can be verified' };
+          }
+          const count = await env.DB.prepare(
+            "SELECT COUNT(*) AS covered FROM shift_assignments WHERE schedule_id=? AND date=? " +
+            "AND ((coverage_department_id=? AND coverage_shift_code=?) OR (coverage_department_id IS NULL AND shift_code=?)) " +
+            "AND shift_code NOT IN ('O','L','PL','ML','SL')"
+          ).bind(baseline.id, duty_date, target_department_id, shift_code, shift_code).first();
+          const covered = Number(count?.covered || 0);
+          const minimum = Number(isNight ? targetDepartment.night_min : targetDepartment.day_min);
+          if (!Number.isFinite(minimum) || covered >= minimum) {
+            return { ok: false, status: 409, error: 'The receiving desk already meets its minimum for this shift; cross-team relief is not justified' };
+          }
+          shortage = { covered, minimum };
+        }
+        return { ok: true, person, qualification, targetDepartment, display_code, shortage };
       }
 
       // ── Admin: reset another staff member's PIN ───────────────────────
@@ -460,14 +480,15 @@ export default {
         const denied = requireAnyPermission('coverage.allocate');
         if (denied) return denied;
         const body = await request.json();
-        const checked = await validateReliefAssignment(body);
+        const checked = await validateReliefAssignment(body, null, true);
         if (!checked.ok) return json({ error: checked.error }, { status: checked.status });
         const id = uuid();
         try {
           await env.DB.batch([
             env.DB.prepare(
-              "INSERT INTO workforce_relief_assignments (id,staff_id,duty_date,target_department_id,shift_code,display_code,reason,status,requested_by) VALUES (?,?,?,?,?,?,?,'pending',?)"
-            ).bind(id, body.staff_id, body.duty_date, body.target_department_id, body.shift_code, checked.display_code, body.reason.trim(), me.id),
+              "INSERT INTO workforce_relief_assignments (id,staff_id,duty_date,target_department_id,shift_code,display_code,reason,status,requested_by,shortage_count_at_request,minimum_required,shortage_confirmed_at) VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?)"
+            ).bind(id, body.staff_id, body.duty_date, body.target_department_id, body.shift_code, checked.display_code, body.reason.trim(), me.id,
+              checked.shortage.covered, checked.shortage.minimum, new Date().toISOString()),
             env.DB.prepare(
               "INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,'relief.requested','workforce_relief_assignment',?,?)"
             ).bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, duty_date: body.duty_date, target_department_id: body.target_department_id, shift_code: body.shift_code, display_code: checked.display_code }))
@@ -493,17 +514,23 @@ export default {
         if (!relief) return json({ error: 'Relief request not found' }, { status: 404 });
         if (relief.status !== 'pending') return json({ error: 'Only pending relief requests can be reviewed' }, { status: 409 });
         if (relief.requested_by === me.id) return json({ error: 'A requester cannot approve their own relief deployment' }, { status: 403 });
+        let checkedShortage = null;
         if (body.status === 'approved') {
           const checked = await validateReliefAssignment({
             staff_id: relief.staff_id, duty_date: relief.duty_date,
             target_department_id: relief.target_department_id, shift_code: relief.shift_code,
             display_code: relief.display_code, reason: relief.reason,
-          }, relief.id);
+          }, relief.id, true);
           if (!checked.ok) return json({ error: 'Relief can no longer be approved: ' + checked.error }, { status: 409 });
+          checkedShortage = checked.shortage;
         }
         const updated = await env.DB.prepare(
-          "UPDATE workforce_relief_assignments SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'"
-        ).bind(body.status, me.id, new Date().toISOString(), relief.id).run();
+          "UPDATE workforce_relief_assignments SET status = ?, reviewed_by = ?, reviewed_at = ?, shortage_count_at_request = ?, minimum_required = ?, shortage_confirmed_at = ? WHERE id = ? AND status = 'pending'"
+        ).bind(body.status, me.id, new Date().toISOString(),
+          checkedShortage?.covered ?? relief.shortage_count_at_request,
+          checkedShortage?.minimum ?? relief.minimum_required,
+          checkedShortage ? new Date().toISOString() : relief.shortage_confirmed_at,
+          relief.id).run();
         if (!updated.meta?.changes) return json({ error: 'Relief request changed; refresh and retry' }, { status: 409 });
         await env.DB.prepare(
           'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
