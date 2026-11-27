@@ -249,6 +249,28 @@ export default {
         if (homeRotationCode && homeRotationCode !== 'O') {
           return { ok: false, status: 409, error: 'The employee is scheduled for a home-desk rotation on this date and cannot be cross-deployed' };
         }
+        const homeDepartment = await env.DB.prepare(
+          'SELECT operational_team FROM departments WHERE id = ?'
+        ).bind(person.department_id).first();
+        const fieldDesignation = await env.DB.prepare(
+          'SELECT designation,relief_capable FROM workforce_staff_designations WHERE staff_id = ?'
+        ).bind(staff_id).first();
+        const isFieldSupervisor = fieldDesignation?.designation === 'Field Supervisor' && fieldDesignation.relief_capable === 1;
+        if (!homeDepartment?.operational_team && !isFieldSupervisor) {
+          return { ok: false, status: 409, error: 'Only a verified controller or formally designated Field Supervisor can receive cross-desk relief' };
+        }
+        if (homeDepartment?.operational_team) {
+          const homeQualification = await env.DB.prepare(
+            'SELECT 1 AS qualified FROM staff_department_qualifications WHERE staff_id=? AND department_id=? ' +
+            'AND relief_only=0 AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) LIMIT 1'
+          ).bind(staff_id, person.department_id, duty_date, duty_date).first();
+          if (!homeQualification) {
+            return { ok: false, status: 409, error: 'The employee must have a current verified home-team qualification before cross-desk relief can be used' };
+          }
+        }
+        if (isFieldSupervisor && display_code !== 'FSA') {
+          return { ok: false, status: 400, error: 'Field Supervisor deployments must use the FSA display code' };
+        }
         const qualification = await env.DB.prepare(
           'SELECT can_day, can_night, relief_only FROM staff_department_qualifications ' +
           'WHERE staff_id = ? AND department_id = ? AND effective_from <= ? ' +
@@ -261,13 +283,8 @@ export default {
         if (isNight ? qualification.can_night !== 1 : qualification.can_day !== 1) {
           return { ok: false, status: 409, error: 'The employee is not qualified for that shift type on the target desk' };
         }
-        if (display_code === 'FSA') {
-          const designation = await env.DB.prepare(
-            'SELECT designation, relief_capable FROM workforce_staff_designations WHERE staff_id = ?'
-          ).bind(staff_id).first();
-          if (designation?.designation !== 'Field Supervisor' || designation.relief_capable !== 1) {
-            return { ok: false, status: 409, error: 'FSA display is restricted to an authorised Field Supervisor' };
-          }
+        if (display_code === 'FSA' && !isFieldSupervisor) {
+          return { ok: false, status: 409, error: 'FSA display is restricted to an authorised Field Supervisor' };
         }
         const policy = await env.DB.prepare(
           'SELECT night_mode FROM staff_shift_policies WHERE staff_id = ?'
@@ -509,6 +526,21 @@ export default {
         const night = body.can_night === true || body.can_night === 1 || body.can_night === '1' ? 1 : 0;
         if (!day && !night) return json({ error: 'At least one shift type must be enabled' }, { status: 400 });
         const policy = await env.DB.prepare('SELECT night_mode FROM staff_shift_policies WHERE staff_id = ?').bind(body.staff_id).first();
+        if (staff.department_id !== body.department_id && staff.role !== 'duty_ops_manager') {
+          const [homeQualification, designation] = await Promise.all([
+            env.DB.prepare(
+              'SELECT 1 AS qualified FROM staff_department_qualifications WHERE staff_id=? AND department_id=? ' +
+              'AND relief_only=0 AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) LIMIT 1'
+            ).bind(body.staff_id, staff.department_id, body.effective_from, body.effective_from).first(),
+            env.DB.prepare(
+              'SELECT designation,relief_capable FROM workforce_staff_designations WHERE staff_id=?'
+            ).bind(body.staff_id).first()
+          ]);
+          const isFieldSupervisor = designation?.designation === 'Field Supervisor' && designation.relief_capable === 1;
+          if (!homeQualification && !isFieldSupervisor) {
+            return json({ error: 'Verify the employee’s home-team qualification before recording cross-desk relief eligibility' }, { status: 409 });
+          }
+        }
         if (night && staff.role === 'duty_ops_manager') return json({ error: 'Duty Ops Manager operational assignments remain day-only' }, { status: 409 });
         if (night && staff.role === 'technical_assistant' && policy?.night_mode !== 'exception_only') {
           return json({ error: 'Technical Assistant night qualification requires the emergency-exception-only policy' }, { status: 409 });
