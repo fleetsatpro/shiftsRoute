@@ -125,7 +125,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
       const min = isNight ? department.night_min : department.day_min;
 
       const candidates = staff
-        .filter(s => canAssign(s.id, day, shiftCode))
+        .filter(s => (isNight ? s.can_night !== 0 : s.can_day !== 0) && canAssign(s.id, day, shiftCode))
         .sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day));
 
       if (candidates.length < min) {
