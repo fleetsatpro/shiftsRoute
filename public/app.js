@@ -161,6 +161,8 @@ function showLogin() {
   el('app').classList.add('hidden');
   el('loginScreen').classList.remove('hidden');
   el('pinInput').value = '';
+  el('enrollmentInput').value = '';
+  state.me = null;
   el('loginError').classList.add('hidden');
   initLogin();
 }
@@ -520,11 +522,21 @@ async function cancelSwap(id) {
 }
 
 // ── Modal helpers ─────────────────────────────────────────
-function openModal(id)  { el(id).classList.remove('hidden'); }
-function closeModal(id) { el(id).classList.add('hidden'); }
+let modalReturnFocus = null;
+function openModal(id) {
+  const modal = el(id);
+  modalReturnFocus = document.activeElement;
+  modal.classList.remove('hidden');
+  modal.querySelector('input, select, button')?.focus();
+}
+function closeModal(id) {
+  el(id).classList.add('hidden');
+  if (!qs('.modal-backdrop:not(.hidden)')) modalReturnFocus?.focus();
+}
 
 // ── Tab navigation ────────────────────────────────────────
 function setTab(tab) {
+  if (['team', 'leave', 'staff'].includes(tab) && state.me?.role !== 'admin') return;
   state.activeTab = tab;
   qsa('.tab-pane').forEach(p => p.classList.add('hidden'));
   const pane = el(`tab-${tab}`);
@@ -938,9 +950,20 @@ function init() {
 
   // Keyboard shortcuts
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      closeModal('addStaffModal');
-      closeModal('newSwapModal');
+    const openDialog = qs('.modal-backdrop:not(.hidden) .modal');
+    if (e.key === 'Escape' && openDialog) {
+      closeModal(openDialog.closest('.modal-backdrop').id);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Tab' && openDialog) {
+      const focusable = qsa('button:not(:disabled), input:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])', openDialog)
+        .filter(node => node.offsetParent !== null);
+      if (focusable.length) {
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+      }
     }
     // Alt+1/2/3... quick tab switch
     if (e.altKey && !e.ctrlKey) {
@@ -950,7 +973,7 @@ function init() {
   });
 
   // Resume session or show login
-  api('/auth/me').then(startApp).catch(() => showLogin());
+  api('/auth/me').then(startApp).catch(err => { if (err.message !== 'Signed out') showLogin(); });
 }
 
 init();
