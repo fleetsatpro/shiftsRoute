@@ -934,7 +934,22 @@ async function onCellClick(e) {
 }
 
 // ── Event wiring ───────────────────────────────────────────
+function applyTheme(theme) {
+  const allowed = new Set(['aurora', 'obsidian', 'amethyst', 'ember', 'arctic']);
+  const selected = allowed.has(theme) ? theme : 'aurora';
+  document.documentElement.dataset.theme = selected;
+  const picker = el('themeSelect');
+  if (picker) picker.value = selected;
+  try { localStorage.setItem('shiftsroute-theme', selected); } catch { /* storage may be unavailable */ }
+}
+
 function init() {
+  // Theme selection is a presentation preference only; it never changes account or schedule data.
+  let savedTheme = 'aurora';
+  try { savedTheme = localStorage.getItem('shiftsroute-theme') || 'aurora'; } catch { /* storage may be unavailable */ }
+  applyTheme(savedTheme);
+  el('themeSelect').addEventListener('change', event => applyTheme(event.target.value));
+
   // Login
   el('loginBtn').addEventListener('click', attemptLogin);
   el('personSelect').addEventListener('change', () => {
