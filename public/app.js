@@ -9,10 +9,16 @@ const DEPT_CODES = {
   SCE:  { day: 'DC', night: 'NC' },
 };
 const CYCLE_ORDER = {
-  ISOC: ['D', 'N', 'O', 'L'],
-  SCE:  ['DC', 'NC', 'O', 'L'],
+  ISOC: ['D', 'N', 'O', 'L', 'T', 'FSA'],
+  SCE:  ['DC', 'NC', 'O', 'L', 'T', 'FSA'],
 };
-const SHIFT_LABEL = { D: 'Day', N: 'Night', DC: 'Day', NC: 'Night', O: 'Off', L: 'Leave' };
+const LEAVE_CODES = new Set(['L', 'PL', 'ML', 'SL']);
+const AUXILIARY_WORK_CODES = new Set(['T', 'FSA']);
+const SHIFT_LABEL = {
+  D: 'ISOC day', N: 'ISOC night', DC: 'SCE day', NC: 'SCE night',
+  O: 'Off', L: 'Leave', PL: 'Paternity leave', ML: 'Maternity leave',
+  SL: 'Sick leave', T: 'Fresh trainee', FSA: 'Field Supervisor', X: 'Assigned to other desk',
+};
 
 let state = {
   me:         null,  // { id, name, department_id, role }
@@ -355,10 +361,11 @@ async function addLeave() {
   const date    = el('leaveDate').value;
   if (!staffId || !date) { toast('Pick a staff member and date.', 'warning'); return; }
   try {
+    const leave_code = el('leaveCode')?.value || 'L';
     await api('/leave', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ staff_id: staffId, date, status: 'approved' }),
+      body: JSON.stringify({ staff_id: staffId, date, leave_code, status: 'approved' }),
     });
     el('leaveDate').value = '';
     await loadLeave();
@@ -807,14 +814,17 @@ function renderMine() {
   subEl.textContent = month;
 
   const filter  = state.mineFilter;
-  const workCodes = new Set([DEPT_CODES[state.department]?.day, DEPT_CODES[state.department]?.night, state.mine.day_code, state.mine.night_code].filter(Boolean));
+  const workCodes = new Set([
+    DEPT_CODES[state.department]?.day, DEPT_CODES[state.department]?.night,
+    state.mine.day_code, state.mine.night_code, ...AUXILIARY_WORK_CODES,
+  ].filter(Boolean));
 
   let html = '';
   for (let d = 1; d <= nDays; d++) {
     const ds   = dateStr(month, d);
     const code = my_shifts[ds] || 'O';
     const isWorking = workCodes.has(code);
-    const isLeave   = code === 'L';
+    const isLeave   = LEAVE_CODES.has(code);
 
     if (filter === 'working' && !isWorking) continue;
     if (filter === 'off'     && (isWorking || isLeave)) continue;
@@ -843,7 +853,7 @@ function renderMyLeave() {
     return;
   }
   el2.innerHTML = state.myLeave.map(l =>
-    `<span class="leave-date-chip">${escHtml(friendlyDate(l.date))}</span>`
+    `<span class="leave-date-chip">${escHtml(friendlyDate(l.date))} · ${escHtml(l.leave_code || 'L')}</span>`
   ).join('');
 }
 
@@ -891,6 +901,7 @@ function renderLeaveList() {
   el('leaveList').innerHTML = filtered.map(l => `
     <span class="leave-chip">
       <b>${escHtml(staffById[l.staff_id] || l.staff_id)}</b> · ${escHtml(l.date)}
+      <span class="leave-code-label">${escHtml(l.leave_code || 'L')}</span>
       <button type="button" class="rm-leave" title="Remove leave" aria-label="Remove leave for ${escHtml(staffById[l.staff_id] || l.staff_id)}" data-action="remove-leave" data-leave-id="${escHtml(l.id)}">×</button>
     </span>
   `).join('') || '<span class="muted">No leave on file for this month.</span>';
@@ -907,7 +918,7 @@ function renderScheduleMetrics() {
   const staff = new Set(rows.map(row => row.staff_id));
   const day = rows.filter(row => row.shift_code === codes.day).length;
   const night = rows.filter(row => row.shift_code === codes.night).length;
-  const leave = rows.filter(row => row.shift_code === 'L').length;
+  const leave = rows.filter(row => LEAVE_CODES.has(row.shift_code)).length;
   const overrides = rows.filter(row => !!row.is_manual_override).length;
   el('metricStaff').textContent = staff.size.toLocaleString();
   el('metricDay').textContent = day.toLocaleString();
@@ -1008,7 +1019,7 @@ function renderGrid() {
 
   for (const staffId of Object.keys(byStaff)) {
     const { name, days } = byStaff[staffId];
-    let dayCount = 0, nightCount = 0, leaveCount = 0;
+    let dayCount = 0, nightCount = 0, leaveCount = 0, auxiliaryCount = 0;
     const meRow = staffId === state.me.id ? ' me' : '';
     html += `<tr class="${meRow.trim()}"><td class="name-col">${escHtml(name)}</td>`;
     for (let d = 1; d <= nDays; d++) {
@@ -1017,7 +1028,8 @@ function renderGrid() {
       const code = safeShiftCode(cell.code);
       if (code === codes.day) dayCount++;
       else if (code === codes.night) nightCount++;
-      else if (code === 'L') leaveCount++;
+      else if (LEAVE_CODES.has(code)) leaveCount++;
+      else if (AUXILIARY_WORK_CODES.has(code)) auxiliaryCount++;
       const wk = isWeekend(month, d) ? ' weekend' : '';
       const ov = cell.override ? ' override' : '';
       const locked = isAdmin ? '' : ' locked';
@@ -1026,7 +1038,7 @@ function renderGrid() {
         <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${ds}" data-code="${code}" aria-label="${escHtml(name)} on ${ds}: ${code}" ${isAdmin ? '' : 'disabled'}>${code}</button>
       </td>`;
     }
-    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount}</td></tr>`;
+    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount + auxiliaryCount}</td></tr>`;
   }
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -1056,18 +1068,19 @@ function renderTotals(byStaff, month, codes) {
   </tr></thead><tbody>`;
   for (const staffId of Object.keys(byStaff)) {
     const { name, days } = byStaff[staffId];
-    let dC = 0, nC = 0, lC = 0, wC = 0;
+    let dC = 0, nC = 0, lC = 0, wC = 0, auxiliaryC = 0;
     for (let d = 1; d <= nDays; d++) {
       const ds = dateStr(month, d);
       const code = (days[ds] || { code: 'O' }).code;
       if (code === codes.day)   { dC++; if (isWeekend(month, d)) wC++; }
       else if (code === codes.night) { nC++; if (isWeekend(month, d)) wC++; }
-      else if (code === 'L')    lC++;
+      else if (LEAVE_CODES.has(code)) lC++;
+      else if (AUXILIARY_WORK_CODES.has(code)) { auxiliaryC++; if (isWeekend(month, d)) wC++; }
     }
     html += `<tr><td class="name-cell">${escHtml(name)}</td>
       <td class="num">${dC}</td><td class="num">${nC}</td>
       <td class="num">${wC}</td><td class="num">${lC}</td>
-      <td class="num" style="color:var(--accent);font-weight:700;">${dC + nC}</td></tr>`;
+      <td class="num" style="color:var(--accent);font-weight:700;">${dC + nC + auxiliaryC}</td></tr>`;
   }
   html += '</tbody>';
   el('totalsTable').innerHTML = html;
@@ -1080,7 +1093,10 @@ async function onCellClick(e) {
   const staffId = btn.dataset.staff;
   const date = btn.dataset.date;
   const current = safeShiftCode(btn.dataset.code);
-  const cycle = CYCLE_ORDER[state.department];
+  const person = state.schedule.assignments?.find(row => row.staff_id === staffId);
+  const cycle = CYCLE_ORDER[state.department].filter(code =>
+    code !== 'FSA' || person?.position_title === 'Field Supervisor'
+  );
   const currentIndex = cycle.indexOf(current);
   if (currentIndex < 0) return;
   const next = cycle[(currentIndex + 1) % cycle.length];

@@ -104,3 +104,27 @@ No green or green-adjacent accent palette. Use a premium midnight/graphite found
 - Browser tests at desktop and mobile sizes for all role workspaces.
 - Real Worker + isolated D1 integration tests for enrollment, sign-in, staff changes, schedule generation, exception approvals and audit records.
 - Production D1 migration, credential issuance, and deployment remain separate explicit release steps.
+
+
+## Reference roster semantics (June–October 2026)
+
+- ISOC: `D` = day, `N` = night.
+- SCE/SCM: `DC` = day, `NC` = night.
+- `O` = off; `T` = fresh trainee assignment; `FSA` = Clinton Juma, Field Supervisor.
+- `PL`, `ML`, and `SL` = paternity, maternity, and sick leave; these remain distinct recorded statuses.
+- FSA identifies Field Supervisor duty; it is not day/night desk coverage. Clinton can also cover either desk using that desk's actual day or night code.
+
+## Cross-team qualification: strict relief-only policy
+
+Cross-qualification is a contingency capability, not routine rotation.
+
+- Every SCE/SCM member is ISOC-qualified using `critical_shortage_only`.
+- Mercy Dorice, Joan, Benson and Wayne are SCE/SCM-qualified while retaining ISOC as their home team.
+- Clinton Juma is the Field Supervisor and is qualified to relieve either desk on day or night shifts.
+- Hilda and Mukasa's desk coverage is shortage-directed, with team-cover shifts explicitly locked from the Duty Ops rota.
+- Relief-only staff are considered only when eligible home-team personnel, after approved leave, existing commitments and shift/rest restrictions, cannot meet the configured minimum on that date and shift. The solver borrows only the number required to reach the minimum; it does not borrow to increase staffing above it.
+- A person already assigned to the other desk is unavailable for a second assignment on the same date. Manual edits and publication enforce the same restriction.
+- David's employment end date is 30 November 2026. November historical records remain intact; he is excluded from December 2026 onward.
+- Mercy Dorice is operational ISOC staff; Mercy Wanyoike is the separate HR account holder.
+
+Unknown shift codes must never silently render as Off. Qualifications and relief modes are stored as dated records.

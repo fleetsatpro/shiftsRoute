@@ -352,7 +352,10 @@
   .cell.shift-D, .cell.shift-DC { background: var(--c-day);   color: #c5dcff; }
   .cell.shift-N, .cell.shift-NC { background: var(--c-night); color: #e2d5ff; }
   .cell.shift-O  { background: var(--c-off);   color: var(--text-3); }
-  .cell.shift-L  { background: var(--c-leave); color: #ffd8c0; }
+  .cell.shift-L, .cell.shift-PL, .cell.shift-ML, .cell.shift-SL { background: var(--c-leave); color: #ffd8c0; }
+  .cell.shift-T { background: rgba(219, 166, 77, .22); color: #f4d28c; }
+  .cell.shift-FSA { background: rgba(126, 104, 225, .24); color: #ded7ff; }
+  .cell.shift-X { background: repeating-linear-gradient(135deg, var(--panel-2), var(--panel-2) 4px, var(--border) 4px, var(--border) 7px); color: var(--text-3); }
   td.override { box-shadow: inset 0 0 0 2px var(--amber); }
   td.override .cell { opacity: .9; }
   td { position: relative; }
@@ -1261,6 +1264,13 @@
             <select id="leaveStaff"></select>
             <label class="ctrl-label" for="leaveDate">Date</label>
             <input type="date" id="leaveDate" />
+            <label class="ctrl-label" for="leaveCode">Leave type</label>
+            <select id="leaveCode" aria-label="Leave type">
+              <option value="L">General leave</option>
+              <option value="PL">Paternity leave</option>
+              <option value="ML">Maternity leave</option>
+              <option value="SL">Sick leave</option>
+            </select>
             <button id="addLeaveBtn" class="primary">Add leave</button>
           </div>
           <div class="leave-list" id="leaveList">

@@ -393,7 +393,7 @@ export default {
         const { results: managerPolicies } = await env.DB.prepare("SELECT staff_id, max_consecutive_days FROM staff_shift_policies WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1)").all();
         const maxWorkStreak = new Map(managers.results.map(manager => [manager.id, managerPolicies.find(policy => policy.staff_id === manager.id)?.max_consecutive_days || 5]));
         const { results: leaveRows } = await env.DB.prepare("SELECT staff_id, date FROM leave_requests WHERE status = 'approved' AND date >= ? AND date < date(?, '+1 month')").bind(body.month + '-01', body.month + '-01').all();
-        const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date, a.shift_code, d.id AS department_id, d.day_code FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id JOIN departments d ON d.id=s.department_id WHERE s.month = ? AND s.id = (SELECT s2.id FROM schedules s2 WHERE s2.month=s.month AND s2.department_id=s.department_id ORDER BY s2.generated_at DESC LIMIT 1) AND a.shift_code NOT IN ('O','L')").bind(body.month).all();
+        const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date, a.shift_code, d.id AS department_id, d.day_code FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id JOIN departments d ON d.id=s.department_id WHERE s.month = ? AND s.id = (SELECT s2.id FROM schedules s2 WHERE s2.month=s.month AND s2.department_id=s.department_id ORDER BY s2.generated_at DESC LIMIT 1) AND a.shift_code NOT IN ('O','L','PL','ML','SL','X')").bind(body.month).all();
         const { results: dayDemand } = await env.DB.prepare("SELECT id, day_min, day_code FROM departments WHERE operational_team=1 ORDER BY id").all();
         const { results: managerQualifications } = await env.DB.prepare("SELECT staff_id, department_id FROM staff_department_qualifications WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1) AND can_day=1 AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)").bind(body.month + '-31', body.month + '-01').all();
         const managerQualificationSet = new Set(managerQualifications.map(row => row.staff_id + ':' + row.department_id));
@@ -413,7 +413,7 @@ export default {
         }
         const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
         const { results: priorDutyDates } = await env.DB.prepare("SELECT manager_staff_id, duty_date FROM duty_ops_assignments WHERE manager_staff_id IS NOT NULL AND duty_date >= date(?, '-7 days') AND duty_date < ?").bind(body.month + '-01', body.month + '-01').all();
-        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id WHERE s.status='published' AND a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id WHERE s.status='published' AND a.shift_code NOT IN ('O','L','PL','ML','SL','X') AND a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
         const managerWorkDates = new Map(managers.results.map(manager => [manager.id, new Set()]));
         for (const row of [...priorDutyDates.map(row => ({ staff_id: row.manager_staff_id, date: row.duty_date })), ...priorShiftDates, ...assignedRows]) {
           if (managerWorkDates.has(row.staff_id)) managerWorkDates.get(row.staff_id).add(row.date);
@@ -663,14 +663,18 @@ export default {
         if (body.status !== undefined && !['approved', 'pending'].includes(body.status)) {
           return json({ error: 'status must be approved or pending' }, { status: 400 });
         }
+        const leaveCode = body.leave_code || 'L';
+        if (!['L', 'PL', 'ML', 'SL'].includes(leaveCode)) {
+          return json({ error: 'leave_code must be L, PL, ML or SL' }, { status: 400 });
+        }
         const target = await env.DB.prepare('SELECT id FROM staff WHERE id = ? AND active = 1').bind(body.staff_id).first();
         if (!target) return json({ error: 'Active staff account not found' }, { status: 404 });
         const id = uuid();
         await env.DB.prepare(
-          'INSERT INTO leave_requests (id, staff_id, date, status) VALUES (?, ?, ?, ?) ' +
-          'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status'
-        ).bind(id, body.staff_id, body.date, body.status || 'approved').run();
-        return json({ id, ...body }, { status: 201 });
+          'INSERT INTO leave_requests (id, staff_id, date, status, leave_code) VALUES (?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status, leave_code = excluded.leave_code'
+        ).bind(id, body.staff_id, body.date, body.status || 'approved', leaveCode).run();
+        return json({ id, ...body, leave_code: leaveCode }, { status: 201 });
       }
 
       if (pathname.startsWith('/api/leave/') && request.method === 'DELETE') {
@@ -843,8 +847,8 @@ export default {
         if (!dept) return json({ error: 'Unknown department' }, { status: 404 });
 
         const { results: staffRows } = await env.DB.prepare(
-          "SELECT s.id, s.name, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=s.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?)) ORDER BY s.name"
-        ).bind(department_id, month + '-31', month + '-01', month + '-31', month + '-01').all();
+          "SELECT s.id, s.name, s.position_title, s.employment_start, s.employment_end, q.allocation_mode, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(p.night_mode,'allowed') AS night_mode, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND (s.active = 1 OR (s.employment_end IS NOT NULL AND s.employment_end >= ?)) AND (s.employment_start IS NULL OR s.employment_start <= ?) AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=s.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?)) ORDER BY s.name"
+        ).bind(department_id, month + '-01', month + '-31', month + '-31', month + '-01', month + '-31', month + '-01').all();
 
         if (staffRows.length === 0) {
           return json({ error: 'No active qualified staff in this department' }, { status: 400 });
@@ -860,14 +864,50 @@ export default {
         for (const person of staffRows) person.night_exception_dates = exceptionDates.get(person.id) || [];
 
         const { results: leaveRows } = await env.DB.prepare(
-          `SELECT staff_id, date FROM leave_requests
+          `SELECT staff_id, date, leave_code FROM leave_requests
            WHERE date LIKE ? AND staff_id IN (${staffRows.map(() => '?').join(',')})
            AND status = 'approved'`
         ).bind(`${month}-%`, ...staffRows.map(s => s.id)).all();
 
         const leaveByStaff = {};
-        for (const s of staffRows) leaveByStaff[s.id] = new Set();
-        for (const row of leaveRows) leaveByStaff[row.staff_id].add(row.date);
+        for (const person of staffRows) leaveByStaff[person.id] = {};
+        for (const row of leaveRows) leaveByStaff[row.staff_id][row.date] = row.leave_code || 'L';
+
+        // Apply employment windows per date and block any same-day work in
+        // the other operational desk before considering a relief candidate.
+        const blockedDatesByStaff = {};
+        for (const person of staffRows) {
+          const blocked = new Set();
+          for (let day = 1; day <= daysInMonth(month); day++) {
+            const date = dateStr(month, day);
+            if ((person.employment_start && date < person.employment_start)
+              || (person.employment_end && date > person.employment_end)) blocked.add(date);
+          }
+          if (blocked.size) blockedDatesByStaff[person.id] = blocked;
+        }
+        const { results: otherDeskAssignments } = await env.DB.prepare(
+          `SELECT sa.staff_id, sa.date
+           FROM shift_assignments sa
+           JOIN schedules other_schedule ON other_schedule.id = sa.schedule_id
+           WHERE other_schedule.month = ? AND other_schedule.department_id <> ?
+             AND other_schedule.id = (
+               SELECT s2.id FROM schedules s2
+               WHERE s2.month = other_schedule.month
+                 AND s2.department_id = other_schedule.department_id
+               ORDER BY s2.generated_at DESC LIMIT 1
+             )
+             AND sa.shift_code NOT IN ('O','L','PL','ML','SL','X')
+          UNION
+          SELECT r.manager_staff_id AS staff_id, r.duty_date AS date
+          FROM duty_ops_assignments r
+          WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month')
+            AND r.manager_staff_id IS NOT NULL
+            AND (r.assignment_type = 'floating' OR r.coverage_department_id <> ?)`
+        ).bind(month, department_id, month + '-01', month + '-01', department_id).all();
+        for (const row of otherDeskAssignments) {
+          if (!blockedDatesByStaff[row.staff_id]) blockedDatesByStaff[row.staff_id] = new Set();
+          blockedDatesByStaff[row.staff_id].add(row.date);
+        }
 
         const priorFinalState = await getPriorFinalState(env.DB, month, department_id, staffRows, dept);
         const { results: dutyAssignments } = await env.DB.prepare(
@@ -876,7 +916,8 @@ export default {
         const preassignedAssignments = Object.fromEntries(dutyAssignments.map(row => [row.duty_date, row.manager_staff_id]));
 
         const { assignments, warnings, totals } = generateSchedule({
-          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState, preassignedAssignments,
+          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState,
+          preassignedAssignments, blockedDatesByStaff,
         });
 
         const scheduleId = uuid();
@@ -891,6 +932,14 @@ export default {
 
         const inserts = [];
         for (const s of staffRows) {
+          const reliefOnly = s.allocation_mode === 'critical_shortage_only';
+          const borrowedForCoverage = Object.values(assignments[s.id]).some(code =>
+            code === dept.day_code || code === dept.night_code
+          );
+          // Clinton's FSA row is visible on his ISOC home roster; in SCE/SCM
+          // he appears only in a month when he is actually borrowed.
+          const fieldSupervisorHomeRow = s.position_title === 'Field Supervisor' && department_id === 'ISOC';
+          if (reliefOnly && !borrowedForCoverage && !fieldSupervisorHomeRow) continue;
           for (let d = 1; d <= daysInMonth(month); d++) {
             const ds = dateStr(month, d);
             inserts.push(
@@ -986,7 +1035,7 @@ export default {
         }
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override
+          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, st.position_title, sa.date, sa.shift_code, sa.is_manual_override
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
            WHERE sa.schedule_id = ?
@@ -1019,23 +1068,68 @@ export default {
         }
 
         const department = await env.DB.prepare(
-          'SELECT day_code, night_code FROM departments WHERE id = ?'
+          'SELECT day_code, night_code, day_min, night_min FROM departments WHERE id = ?'
         ).bind(targetSchedule.department_id).first();
         const validCodes = department
-          ? [department.day_code, department.night_code, 'O', 'L']
+          ? [department.day_code, department.night_code, 'O', 'L', 'PL', 'ML', 'SL', 'T']
           : [];
-        if (!validCodes.includes(shift_code)) {
-          return json({ error: 'Shift code is not valid for this department' }, { status: 400 });
-        }
-
-        // Confirm the staff member belongs to the schedule's department.
-        const existing = await env.DB.prepare(
-          `SELECT sa.id FROM shift_assignments sa
+        const assignment = await env.DB.prepare(
+          `SELECT sa.id, sa.shift_code AS current_shift_code, st.position_title, q.can_day, q.can_night,
+                  q.allocation_mode, COALESCE(p.night_mode, 'allowed') AS night_mode
+           FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
+           JOIN staff_department_qualifications q
+             ON q.staff_id = st.id AND q.department_id = ?
+            AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?)
+           LEFT JOIN staff_shift_policies p ON p.staff_id = st.id
            WHERE sa.schedule_id = ? AND sa.staff_id = ? AND sa.date = ?
-             AND st.department_id = ?`
-        ).bind(scheduleId, staff_id, date, targetSchedule.department_id).first();
-        if (!existing) return json({ error: 'Assignment not found' }, { status: 404 });
+           ORDER BY q.effective_from DESC LIMIT 1`
+        ).bind(targetSchedule.department_id, date, date, scheduleId, staff_id, date).first();
+        if (!assignment) return json({ error: 'Assignment or effective team qualification not found' }, { status: 404 });
+        if (shift_code === 'FSA' && assignment.position_title !== 'Field Supervisor') {
+          return json({ error: 'FSA is reserved for the Field Supervisor' }, { status: 403 });
+        }
+        if (shift_code !== 'FSA' && !validCodes.includes(shift_code)) {
+          return json({ error: 'Shift code is not valid for this desk' }, { status: 400 });
+        }
+        if (shift_code === department.day_code && !assignment.can_day) {
+          return json({ error: 'No effective day qualification for this desk' }, { status: 409 });
+        }
+        if (shift_code === department.night_code) {
+          const exception = await env.DB.prepare(
+            `SELECT 1 AS approved FROM workforce_shift_exceptions
+             WHERE staff_id = ? AND date = ? AND shift_code = ? AND status = 'approved'`
+          ).bind(staff_id, date, shift_code).first();
+          const regularNight = assignment.night_mode === 'allowed' && assignment.can_night;
+          const emergencyNight = assignment.night_mode === 'exception_only' && !!exception;
+          if (!regularNight && !emergencyNight) {
+            return json({ error: 'Night assignment requires effective qualification or approved exception' }, { status: 409 });
+          }
+        }
+        if (assignment.allocation_mode === 'critical_shortage_only'
+          && (shift_code === department.day_code || shift_code === department.night_code)
+          && assignment.current_shift_code !== shift_code) {
+          return json({
+            error: 'Cross-team relief is solver-controlled and can only be scheduled after home-team capacity is exhausted. Regenerate the roster to calculate a genuine shortage.',
+          }, { status: 409 });
+        }
+        if (!['O', 'L', 'PL', 'ML', 'SL'].includes(shift_code)) {
+          const conflict = await env.DB.prepare(
+            `SELECT 1 AS conflict FROM shift_assignments other
+             JOIN schedules other_schedule ON other_schedule.id = other.schedule_id
+             WHERE other.staff_id = ? AND other.date = ?
+               AND other_schedule.month = ? AND other_schedule.department_id <> ?
+               AND other_schedule.id = (
+                 SELECT s2.id FROM schedules s2
+                 WHERE s2.month = other_schedule.month
+                   AND s2.department_id = other_schedule.department_id
+                 ORDER BY s2.generated_at DESC LIMIT 1
+               )
+               AND other.shift_code NOT IN ('O','L','PL','ML','SL','X')
+             LIMIT 1`
+          ).bind(staff_id, date, targetSchedule.month, targetSchedule.department_id).first();
+          if (conflict) return json({ error: 'Person is already assigned to the other desk on this date' }, { status: 409 });
+        }
 
         const update = await env.DB.prepare(
           `UPDATE shift_assignments
@@ -1056,9 +1150,29 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
         const id = publishMatch[1];
-        const schedule = await env.DB.prepare('SELECT id, status FROM schedules WHERE id = ?').bind(id).first();
+        const schedule = await env.DB.prepare('SELECT id, status, month, department_id FROM schedules WHERE id = ?').bind(id).first();
         if (!schedule) return json({ error: 'Schedule not found' }, { status: 404 });
         if (schedule.status === 'published') return json({ error: 'Schedule is already published' }, { status: 409 });
+        const conflicts = await env.DB.prepare(
+          `SELECT mine.staff_id, mine.date, other_schedule.department_id AS conflicting_department
+           FROM shift_assignments mine
+           JOIN shift_assignments other ON other.staff_id = mine.staff_id AND other.date = mine.date
+           JOIN schedules other_schedule ON other_schedule.id = other.schedule_id
+           WHERE mine.schedule_id = ? AND other_schedule.month = ?
+             AND other_schedule.department_id <> ? AND other_schedule.status = 'published'
+             AND other_schedule.id = (
+               SELECT s2.id FROM schedules s2
+               WHERE s2.month = other_schedule.month
+                 AND s2.department_id = other_schedule.department_id
+               ORDER BY s2.generated_at DESC LIMIT 1
+             )
+             AND mine.shift_code NOT IN ('O','L','PL','ML','SL','X')
+             AND other.shift_code NOT IN ('O','L','PL','ML','SL','X')
+           LIMIT 20`
+        ).bind(id, schedule.month, schedule.department_id).all();
+        if (conflicts.results.length) {
+          return json({ error: 'Cannot publish: a person has overlapping assignments across ISOC and SCE/SCM', conflicts: conflicts.results }, { status: 409 });
+        }
         const result = await env.DB.prepare("UPDATE schedules SET status = 'published' WHERE id = ? AND status = 'draft'").bind(id).run();
         if (!result.meta?.changes) return json({ error: 'Schedule state changed; reload and retry' }, { status: 409 });
         return json({ published: true });
@@ -1157,7 +1271,7 @@ async function getPriorFinalState(db, month, departmentId, staffRows, dept) {
     const lastCode = results[0].shift_code;
     let consecutiveWork = 0;
     for (const r of results) {
-      if (r.shift_code === dept.day_code || r.shift_code === dept.night_code) consecutiveWork++;
+      if ([dept.day_code, dept.night_code, 'T', 'FSA'].includes(r.shift_code)) consecutiveWork++;
       else break;
     }
     priorFinalState[s.id] = {
