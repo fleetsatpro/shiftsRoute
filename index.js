@@ -373,7 +373,7 @@ export default {
         const { results: leaveRows } = await env.DB.prepare("SELECT staff_id, date FROM leave_requests WHERE status = 'approved' AND date >= ? AND date < date(?, '+1 month')").bind(body.month + '-01', body.month + '-01').all();
         const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date, a.shift_code, d.id AS department_id, d.day_code FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id JOIN departments d ON d.id=s.department_id WHERE s.month = ? AND s.id = (SELECT s2.id FROM schedules s2 WHERE s2.month=s.month AND s2.department_id=s.department_id ORDER BY s2.generated_at DESC LIMIT 1) AND a.shift_code NOT IN ('O','L')").bind(body.month).all();
         const { results: dayDemand } = await env.DB.prepare("SELECT id, day_min, day_code FROM departments WHERE operational_team=1 ORDER BY id").all();
-        const { results: managerQualifications } = await env.DB.prepare("SELECT staff_id, department_id FROM staff_department_qualifications WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1) AND can_day=1 AND effective_to IS NULL").all();
+        const { results: managerQualifications } = await env.DB.prepare("SELECT staff_id, department_id FROM staff_department_qualifications WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1) AND can_day=1 AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)").bind(body.month + '-31', body.month + '-01').all();
         const managerQualificationSet = new Set(managerQualifications.map(row => row.staff_id + ':' + row.department_id));
         const dayCoverage = new Map();
         for (const row of assignedRows) {
