@@ -679,7 +679,12 @@ async function loadDutyWorkspace() {
     <div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.date)} · ${escHtml(item.shift_code)}
     <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
     ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
-  const eligibleRelief = overview.qualifications.filter(q => q.relief_only && overview.staff.some(person => person.id === q.staff_id && person.active));
+  const reliefByStaff = new Map();
+  for (const qualification of overview.qualifications) {
+    if (qualification.relief_only && overview.staff.some(person => person.id === qualification.staff_id && person.active)
+      && !reliefByStaff.has(qualification.staff_id)) reliefByStaff.set(qualification.staff_id, qualification);
+  }
+  const eligibleRelief = [...reliefByStaff.values()];
   const reliefStaff = new Map(overview.staff.map(person => [person.id, person]));
   el('dutyReliefStaff').innerHTML = eligibleRelief.map(q => {
     const person = reliefStaff.get(q.staff_id);
