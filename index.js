@@ -392,7 +392,11 @@ export default {
           'SELECT id, name, day_min, day_max, night_min, night_max, day_code, night_code FROM departments WHERE operational_team = 1 ORDER BY id'
         ).all();
         const { results: qualifications } = await env.DB.prepare(
-          'SELECT q.staff_id, q.department_id, q.can_day, q.can_night, q.priority, q.relief_only, q.effective_from, q.effective_to, s.name AS staff_name FROM staff_department_qualifications q JOIN staff s ON s.id = q.staff_id WHERE q.effective_to IS NULL ORDER BY s.name, q.department_id'
+          'SELECT q.staff_id, q.department_id, q.can_day, q.can_night, q.priority, q.relief_only, q.effective_from, q.effective_to, s.name AS staff_name, ' +
+          'd.designation, COALESCE(d.relief_capable,0) AS relief_capable ' +
+          'FROM staff_department_qualifications q JOIN staff s ON s.id = q.staff_id ' +
+          'LEFT JOIN workforce_staff_designations d ON d.staff_id = s.id ' +
+          'WHERE q.effective_to IS NULL ORDER BY s.name, q.department_id'
         ).all();
         return json({ staff: results, departments, qualifications, role: me.role, authority_level: (await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first())?.authority_level ?? 0 });
       }

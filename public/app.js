@@ -694,7 +694,7 @@ async function loadDutyWorkspace() {
   const reliefStaff = new Map(overview.staff.map(person => [person.id, person]));
   el('dutyReliefStaff').innerHTML = eligibleRelief.map(q => {
     const person = reliefStaff.get(q.staff_id);
-    return person ? `<option value="${escHtml(person.id)}" data-department="${escHtml(person.department_id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>` : '';
+    return person ? `<option value="${escHtml(person.id)}" data-department="${escHtml(person.department_id)}" data-designation="${escHtml(q.designation || '')}" data-relief-capable="${q.relief_capable ? '1' : '0'}">${escHtml(person.name)} · ${escHtml(person.department_id)}${q.designation ? ' · ' + escHtml(q.designation) : ''}</option>` : '';
   }).join('');
   el('dutyReliefDept').innerHTML = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   updateReliefShiftOptions();
@@ -757,7 +757,9 @@ async function submitReliefAssignment(event) {
     duty_date: el('dutyReliefDate').value,
     target_department_id: el('dutyReliefDept').value,
     shift_code,
-    display_code: staff_id === 'clinton-juma' ? 'FSA' : shift_code,
+    display_code: el('dutyReliefStaff').selectedOptions[0]?.dataset.reliefCapable === '1'
+      && el('dutyReliefStaff').selectedOptions[0]?.dataset.designation === 'Field Supervisor'
+      ? 'FSA' : shift_code,
     reason: el('dutyReliefReason').value.trim(),
   };
   try {
