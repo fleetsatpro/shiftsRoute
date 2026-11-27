@@ -145,6 +145,18 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.ok(griffinProfile.permissions.includes('system.configure'));
     assert.equal(griffinProfile.authority_level, 1000);
 
+    // Prior published Off rows must not be counted as work in the next
+    // month's Duty Ops consecutive-day calculation.
+    wrangler(['d1','execute',database,'--local','--command',
+      "INSERT INTO schedules (id,month,generated_at,status,notes,department_id) " +
+      "VALUES ('prior-off-only','2026-11','2026-11-30T23:59:00.000Z','published','Off-only DOM history','SCE'); " +
+      "WITH RECURSIVE days(n) AS (SELECT 24 UNION ALL SELECT n+1 FROM days WHERE n<30) " +
+      "INSERT INTO shift_assignments (id,schedule_id,staff_id,date,shift_code,is_manual_override) " +
+      "SELECT 'prior-off-' || staff.id || '-' || days.n,'prior-off-only',staff.id," +
+      "'2026-11-' || printf('%02d',days.n),'O',0 FROM staff CROSS JOIN days " +
+      "WHERE staff.id IN ('hilda','mukasa');"
+    ], persistDir);
+
     const rotaGenerate = await fetch(baseUrl + '/api/workforce/duty-rota/generate', {
       method: 'POST', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ month: '2026-12' }),
