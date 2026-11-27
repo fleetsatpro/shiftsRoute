@@ -290,12 +290,13 @@ export default {
           || !/^\\d{4}-\\d{2}-\\d{2}$/.test(body.effective_from || '')) {
           return json({ error: 'Invalid qualification details' }, { status: 400 });
         }
-        const staff = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const staff = await env.DB.prepare('SELECT id, active, role FROM staff WHERE id = ?').bind(body.staff_id).first();
         const dept = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
         if (!staff?.active || !dept) return json({ error: 'Active staff and operational department are required' }, { status: 400 });
         const day = body.can_day === true || body.can_day === 1 || body.can_day === '1' ? 1 : 0;
         const night = body.can_night === true || body.can_night === 1 || body.can_night === '1' ? 1 : 0;
         if (!day && !night) return json({ error: 'At least one shift type must be enabled' }, { status: 400 });
+        if (night && ['duty_ops_manager','technical_assistant'].includes(staff.role)) return json({ error: 'Duty Ops Managers and Technical Assistants are day-only; emergency exceptions are handled separately' }, { status: 409 });
         await env.DB.batch([
           env.DB.prepare('UPDATE staff_department_qualifications SET effective_to = ? WHERE staff_id = ? AND department_id = ? AND effective_to IS NULL').bind(new Date(Date.now()-86400000).toISOString().slice(0,10), body.staff_id, body.department_id),
           env.DB.prepare('INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approved_by, approval_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(body.staff_id, body.department_id, day, night, Number.isInteger(body.priority) ? Math.max(1, Math.min(1000, body.priority)) : 100, body.effective_from, me.id, String(body.approval_note || '').slice(0,500)),
