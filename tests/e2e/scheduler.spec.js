@@ -129,6 +129,9 @@ test('theme system offers distinct palettes and remembers the selected theme', a
   await installIsolatedApi(page, 'admin');
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
+  await page.locator('#pinInput').fill('123456');
+  await page.locator('#loginBtn').click();
+  await expect(page.locator('#app')).toBeVisible();
   await expect(page.getByLabel('Choose interface theme')).toBeVisible();
   await expect(page.locator('#themeSelect option')).toHaveCount(5);
   await page.locator('#themeSelect').selectOption('amethyst');
