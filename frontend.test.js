@@ -8,8 +8,10 @@ test('HTML escaping neutralizes text and attribute metacharacters', () => {
 });
 
 test('rendering accepts only known shift codes and status values', () => {
-  for (const code of ['D', 'N', 'DC', 'NC', 'O', 'L']) assert.equal(safeShiftCode(code), code);
-  assert.equal(safeShiftCode('<script>'), 'O');
+  for (const code of ['D', 'N', 'DC', 'NC', 'O', 'L', 'PL', 'ML', 'SL', 'T', 'FSA', 'X']) {
+    assert.equal(safeShiftCode(code), code);
+  }
+  assert.equal(safeShiftCode('<script>'), 'UNKNOWN');
   assert.equal(safeStatus('published'), 'published');
   assert.equal(safeStatus('onmouseover=alert(1)'), 'unknown');
 });
