@@ -223,6 +223,13 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     };
     const initialSce = await generateDepartment('SCE');
     const initialIsoc = await generateDepartment('ISOC');
+    for (const [schedule, departmentId] of [[initialSce, 'SCE'], [initialIsoc, 'ISOC']]) {
+      for (const row of schedule.assignments.filter(item => item.role === 'duty_ops_manager' && item.shift_code !== 'O')) {
+        assert.ok(rotaRows.some(duty => duty.manager_staff_id === row.staff_id
+          && duty.duty_date === row.date && duty.coverage_department_id === departmentId),
+        'a Duty Ops Manager may cover a desk only on an explicit team-cover rota date');
+      }
+    }
     assert.ok(!initialIsoc.assignments.some(row => row.staff_id === 'griffin'),
       'SCE staff must not appear as routine ISOC primary staffing');
     assert.ok(!initialIsoc.assignments.some(row => row.staff_id === 'murad'),

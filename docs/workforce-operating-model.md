@@ -135,3 +135,4 @@ Unknown shift codes must remain visibly unknown and trigger data-quality attenti
 - David's employment ends 30 November 2026. His account is inactive for forward scheduling; past schedule and audit rows remain available for historical reference.
 
 The relief workflow is deliberately gated: generate the receiving desk's baseline roster, identify an actual minimum-headcount shortfall, submit a reasoned dated request, obtain independent approval, then regenerate the receiving and home-team rosters. A skill preference or convenience alone is not sufficient grounds to borrow an SCE employee for ISOC.
+- Duty Ops Managers are excluded from ordinary solver candidate pools. A manager appears on an operational desk roster only when the published/assigned Duty Ops rota explicitly names that manager and receiving desk for that date; those fixed cover days are locked against optimization and manual override.
