@@ -14,7 +14,12 @@
 
 const SESSION_DAYS = 7;
 const SESSION_COOKIE = 'roc_session';
-const PBKDF2_ITERATIONS = 310000;
+// Three chained 100,000-iteration PBKDF2-SHA-256 stages. Cloudflare Workers'
+// WebCrypto rejects a single PBKDF2 operation above 100,000 iterations.
+// Chaining independent, domain-separated stages preserves 300,000 total
+// PBKDF2 iterations without exceeding the platform limit per operation.
+const PBKDF2_ITERATIONS_PER_STAGE = 100000;
+const PBKDF2_STAGES = 3;
 
 export async function sha256Hex(input) {
   const enc = new TextEncoder().encode(String(input));
@@ -26,12 +31,26 @@ export async function hashPin(pin, saltHex = null) {
   const salt = saltHex
     ? Uint8Array.from(saltHex.match(/.{2}/g).map((b) => parseInt(b, 16)))
     : crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-    key,
-    256,
-  );
+  if (salt.length !== 16) throw new TypeError('PIN salt must be 128 bits');
+
+  const enc = new TextEncoder();
+  let material = enc.encode(pin);
+  let bits;
+  for (let stage = 1; stage <= PBKDF2_STAGES; stage++) {
+    // Append a stage-specific 32-bit counter to the random per-user salt.
+    // Each stage consumes the previous stage's full 256-bit output.
+    const stageSalt = new Uint8Array(20);
+    stageSalt.set(salt);
+    new DataView(stageSalt.buffer).setUint32(16, stage, false);
+    const key = await crypto.subtle.importKey('raw', material, 'PBKDF2', false, ['deriveBits']);
+    bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: stageSalt, iterations: PBKDF2_ITERATIONS_PER_STAGE, hash: 'SHA-256' },
+      key,
+      256,
+    );
+    material = new Uint8Array(bits);
+  }
+
   const hex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return { salt: hex(salt), hash: hex(bits) };
 }
