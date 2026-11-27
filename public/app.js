@@ -204,7 +204,7 @@ async function startApp() {
     return;
   }
 
-  state.department = state.me.department_id;
+  state.department = ['ISOC','SCE'].includes(state.me.department_id) ? state.me.department_id : 'ISOC';
   el('dept').value  = state.department;
   el('dept').disabled = !isAdmin;
   updateDeptBadge();
@@ -225,7 +225,10 @@ async function startApp() {
 }
 
 function updateDeptBadge() {
-  el('deptBadge').textContent = state.department === 'SCE' ? 'SCE / SCM' : 'ISOC';
+  const home = state.me?.department_id;
+  el('deptBadge').textContent = home && !['ISOC','SCE'].includes(home)
+    ? 'Relief deployments'
+    : state.department === 'SCE' ? 'SCE / SCM' : 'ISOC';
 }
 
 // ── Data loaders ──────────────────────────────────────────
@@ -253,6 +256,13 @@ async function loadSwaps() {
 
 // BUG FIX: now sends department filter so correct schedule is returned
 async function loadLatest() {
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
+  if (!isAdmin) {
+    state.schedule = null;
+    state.mine = await api('/workforce/my-roster?month=' + encodeURIComponent(state.month));
+    renderAll();
+    return;
+  }
   const list = await api(`/schedules?month=${state.month}&department=${state.department}`);
   if (list.length === 0) {
     state.schedule = null;
@@ -1064,7 +1074,8 @@ function renderGrid() {
       coverageCode: row.coverage_shift_code || null,
       borrowed: isReliefTargetRow && row.department_id !== state.department,
       outgoing: !!row.coverage_department_id && row.coverage_department_id !== state.department,
-      editable: isAdmin && isHomeRow && !row.coverage_department_id,
+      editable: isAdmin && isHomeRow && !row.coverage_department_id
+        && ['D','N','DC','NC','O','L'].includes(row.shift_code),
     };
   }
   if (!Object.keys(byStaff).length) {
