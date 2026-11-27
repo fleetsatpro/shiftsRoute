@@ -189,7 +189,7 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
         if (d === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
           run += priorFinalState[staffId].consecutiveWork ?? 0;
         }
-        if (run > 5) return false;
+        if (run > (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
       }
     }
     return true;
