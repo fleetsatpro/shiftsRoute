@@ -46,3 +46,16 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  worker-d1-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install project dependencies
+        run: npm install
+      - name: Exercise Worker against isolated local D1
+        run: npm run test:worker

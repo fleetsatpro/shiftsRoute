@@ -11,7 +11,8 @@
     "test:e2e": "playwright test",
     "db:migrate:local": "wrangler d1 migrations apply raw-ter-shift --local",
     "db:migrate:preview": "wrangler d1 migrations apply raw-ter-shift-preview --remote --config wrangler.routesa.preview.toml",
-    "db:migrate:remote": "wrangler d1 migrations apply raw-ter-shift --remote --config wrangler.toml"
+    "db:migrate:remote": "wrangler d1 migrations apply raw-ter-shift --remote --config wrangler.toml",
+    "test:worker": "node --test worker.integration.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.0.0",
