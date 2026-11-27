@@ -357,8 +357,7 @@ export default {
         if (!/^[a-z0-9_-]{1,80}$/.test(id)) return json({ error: 'Invalid staff identifier' }, { status: 400 });
         await env.DB.batch([
           env.DB.prepare("INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, 'staff', 0)").bind(id, body.name.trim(), body.department_id),
-          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'allowed', 5, 11, date('now'))").bind(id),
-          env.DB.prepare('INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approved_by, approval_note) VALUES (?, ?, 1, 1, 100, date(\'now\'), ?, ?)').bind(id, body.department_id, me.id, 'HR onboarding default; confirm qualification before scheduling'),
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
           env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id }))
         ]);
         return json({ id, ok: true }, { status: 201 });
