@@ -78,10 +78,12 @@ function toast(msg, type = 'info', duration = 3500) {
 // ── Loading overlay ───────────────────────────────────────
 function showLoading(msg = 'Loading…') {
   el('loadingMsg').textContent = msg;
+  el('app').setAttribute('aria-busy', 'true');
   el('loadingOverlay').classList.remove('hidden');
 }
 function hideLoading() {
   el('loadingOverlay').classList.add('hidden');
+  el('app').setAttribute('aria-busy', 'false');
 }
 
 // ── API wrapper ───────────────────────────────────────────
@@ -542,7 +544,12 @@ function setTab(tab) {
   qsa('.tab-pane').forEach(p => p.classList.add('hidden'));
   const pane = el(`tab-${tab}`);
   if (pane) pane.classList.remove('hidden');
-  qsa('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  qsa('.nav-btn').forEach(b => {
+    const active = b.dataset.tab === tab;
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
   // Lazy-load tab data and surface failures instead of silently leaving stale content.
   if (tab === 'swaps') loadSwaps().catch(err => toast('Could not load swap requests: ' + err.message, 'error'));
   if (tab === 'staff') loadStaffTable().catch(err => toast('Could not load staff: ' + err.message, 'error'));
@@ -928,6 +935,7 @@ function init() {
     chip.addEventListener('click', () => {
       qsa('.filter-chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
+      qsa('.filter-chip').forEach(c => c.setAttribute('aria-pressed', String(c === chip)));
       state.mineFilter = chip.dataset.filter;
       renderMine();
     });
