@@ -1812,10 +1812,12 @@ export default {
         }
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code,
+          `SELECT sa.staff_id, st.name AS staff_name, sc.department_id AS roster_department_id,
+                  st.department_id AS home_department_id, sa.date, sa.shift_code,
                   sa.coverage_department_id, sa.coverage_shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
+           JOIN schedules sc ON sc.id = sa.schedule_id
            WHERE sa.schedule_id = ?
            ORDER BY st.department_id, st.name, sa.date`
         ).bind(id).all();

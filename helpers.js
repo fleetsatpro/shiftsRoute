@@ -24,16 +24,24 @@ export function buildCsv(assignments, month) {
   const byStaff = Object.create(null);
   for (const row of assignments) {
     if (!byStaff[row.staff_id]) {
-      byStaff[row.staff_id] = { name: row.staff_name, department_id: row.department_id, days: {} };
+      byStaff[row.staff_id] = {
+        name: row.staff_name,
+        department_id: row.roster_department_id || row.department_id,
+        home_department_id: row.home_department_id || row.department_id,
+        days: {},
+      };
     }
-    byStaff[row.staff_id].days[row.date] = row.shift_code;
+    byStaff[row.staff_id].days[row.date] = row.shift_code === 'FSA'
+      && row.coverage_department_id && row.coverage_shift_code
+      ? 'FSA:' + row.coverage_department_id + '/' + row.coverage_shift_code
+      : row.shift_code;
   }
 
-  const header = ['Department', 'Staff', ...Array.from({ length: dayCount }, (_, i) => dateStr(month, i + 1))];
+  const header = ['Department', 'Staff', 'Home Team', ...Array.from({ length: dayCount }, (_, i) => dateStr(month, i + 1))];
   const lines = [header.map(csvCell).join(',')];
   for (const staffId of Object.keys(byStaff)) {
-    const { name, department_id, days } = byStaff[staffId];
-    const row = [department_id, name];
+    const { name, department_id, home_department_id, days } = byStaff[staffId];
+    const row = [department_id, name, home_department_id];
     for (let d = 1; d <= dayCount; d++) row.push(days[dateStr(month, d)] || '');
     lines.push(row.map(csvCell).join(','));
   }
