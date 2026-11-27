@@ -8,6 +8,11 @@ INSERT INTO departments
    night_rest_rule, weekend_staffed, operational_team)
 SELECT 'ROC', 'ROC Operations Management', 0, 0, 0, 0, 'MD', 'MN', 1, 1, 0
 WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = 'ROC');
+INSERT INTO departments
+  (id, name, day_min, day_max, night_min, night_max, day_code, night_code,
+   night_rest_rule, weekend_staffed, operational_team)
+SELECT 'HR', 'Human Resources', 0, 0, 0, 0, 'HRD', 'HRN', 1, 0, 0
+WHERE NOT EXISTS (SELECT 1 FROM departments WHERE id = 'HR');
 
 CREATE TABLE IF NOT EXISTS role_permissions (
   role TEXT NOT NULL,
@@ -29,6 +34,13 @@ INSERT OR IGNORE INTO role_permissions (role, permission) VALUES
   ('hr', 'availability.manage'),
   ('hr', 'qualifications.manage'),
   ('hr', 'hr_reports.read'),
+  ('duty_ops_manager', 'system.configure'),
+  ('duty_ops_manager', 'staff.manage'),
+  ('duty_ops_manager', 'roles.manage'),
+  ('duty_ops_manager', 'schedules.generate'),
+  ('duty_ops_manager', 'schedules.publish'),
+  ('duty_ops_manager', 'exceptions.approve'),
+  ('duty_ops_manager', 'audit.read'),
   ('duty_ops_manager', 'roster.read'),
   ('duty_ops_manager', 'coverage.read'),
   ('duty_ops_manager', 'coverage.allocate'),
@@ -40,6 +52,18 @@ INSERT OR IGNORE INTO role_permissions (role, permission) VALUES
   ('staff', 'roster.self'),
   ('staff', 'leave.self'),
   ('staff', 'swaps.self');
+
+CREATE TABLE IF NOT EXISTS role_hierarchy (
+  role TEXT PRIMARY KEY,
+  authority_level INTEGER NOT NULL UNIQUE,
+  description TEXT NOT NULL
+);
+INSERT OR REPLACE INTO role_hierarchy (role, authority_level, description) VALUES
+  ('admin', 1000, 'System owner / platform administrator'),
+  ('duty_ops_manager', 900, 'Duty Ops Manager; full administrative authority, operationally superior to all controllers'),
+  ('hr', 700, 'Human Resources'),
+  ('technical_assistant', 400, 'Technical Assistant'),
+  ('staff', 300, 'Controller / operational staff');
 
 CREATE TABLE IF NOT EXISTS staff_department_qualifications (
   staff_id TEXT NOT NULL REFERENCES staff(id),
@@ -101,7 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_duty_ops_manager_date
   ON duty_ops_assignments(manager_staff_id, duty_date);
 
 -- Initial workforce configuration requested by operations.
-UPDATE staff SET role = 'admin' WHERE id = 'griffin';
+UPDATE staff SET role = 'admin', name = 'Griffin' WHERE id = 'griffin';
 UPDATE staff SET role = 'duty_ops_manager' WHERE id = 'hilda';
 UPDATE staff SET role = 'technical_assistant' WHERE id = 'wayne';
 UPDATE staff SET active = 0 WHERE id = 'david';
@@ -109,7 +133,7 @@ UPDATE staff SET active = 0 WHERE id = 'david';
 INSERT OR IGNORE INTO staff (id, name, department_id, active, role, pin_set)
 VALUES
   ('mukasa', 'Mukasa', 'ROC', 1, 'duty_ops_manager', 0),
-  ('mercy', 'Mercy', 'ISOC', 1, 'staff', 0),
+  ('mercy', 'Mercy Wanyoike', 'HR', 1, 'hr', 0),
   ('cate', 'Cate', 'ISOC', 1, 'staff', 0),
   ('oliera', 'Oliera', 'ISOC', 1, 'staff', 0);
 
@@ -141,11 +165,11 @@ VALUES
   ('benson', 'SCE', 1, 1, 60, '2026-11-27', 'Cross-trained at SCE; rotation and shortage support'),
   ('joan', 'SCE', 1, 1, 60, '2026-11-27', 'Cross-trained at SCE; rotation and shortage support');
 
--- New ISOC staff receive standard home-team eligibility.
+-- New ISOC staff receive standard home-team eligibility. Mercy Wanyoike is HR and is not placed on the ISOC roster.
 INSERT OR IGNORE INTO staff_department_qualifications
   (staff_id, department_id, can_day, can_night, priority, effective_from, approval_note)
 SELECT id, 'ISOC', 1, 1, 100, '2026-11-27', 'ISOC onboarding qualification'
-FROM staff WHERE id IN ('mercy','cate','oliera');
+FROM staff WHERE id IN ('cate','oliera');
 
 -- Hilda's existing home-team row is updated to day-only, consistent with the
 -- Duty Ops day-coverage policy; all policy changes remain editable in HR/Admin UI.
