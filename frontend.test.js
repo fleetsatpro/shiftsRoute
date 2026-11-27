@@ -13,3 +13,17 @@ test('rendering accepts only known shift codes and status values', () => {
   assert.equal(safeStatus('published'), 'published');
   assert.equal(safeStatus('onmouseover=alert(1)'), 'unknown');
 });
+
+import { readFile } from 'node:fs/promises';
+
+test('frontend is externally loaded, mobile navigable, and free of inline event handlers', async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL('./public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('./public/app.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(html, /<script type="module" src="\\/app\\.js"><\\/script>/);
+  assert.match(html, /class="mobile-nav"/);
+  assert.match(html, /class="skip-link"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.doesNotMatch(app, /on(?:click|change|submit)\\s*=/i);
+});
