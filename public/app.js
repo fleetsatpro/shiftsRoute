@@ -565,9 +565,10 @@ function renderStatus() {
     el('exportBtn').disabled  = true;
     return;
   }
-  pill.textContent = s.status;
-  pill.className   = `status-pill ${s.status}`;
-  el('publishBtn').disabled = s.status === 'published';
+  const status = safeStatus(s.status);
+  pill.textContent = status;
+  pill.className   = `status-pill ${status}`;
+  el('publishBtn').disabled = status === 'published';
   el('exportBtn').disabled  = false;
 }
 
