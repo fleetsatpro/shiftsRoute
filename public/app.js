@@ -180,7 +180,7 @@ async function startApp() {
   el('meRolePill').textContent = state.me.role;
   el('meRolePill').className = `role-pill ${state.me.role === 'staff' ? 'staff-role' : ''}`;
 
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
   qsa('.admin-only').forEach(n => n.classList.toggle('hidden', !isAdmin));
 
   state.department = state.me.department_id;
@@ -212,7 +212,7 @@ async function loadStaff() {
 }
 
 async function loadLeave() {
-  if (state.me.role !== 'admin') { state.leave = []; return; }
+  if (!['admin', 'duty_ops_manager'].includes(state.me.role)) { state.leave = []; return; }
   state.leave = await api(`/leave?month=${state.month}`);
   renderLeaveList();
 }
@@ -374,7 +374,7 @@ async function onDeptOrMonthChange() {
     await loadMyLeave();
     await loadLatest();
     await loadSwaps();
-    if (state.me.role === 'admin') await loadStaffTable();
+    if (['admin', 'duty_ops_manager'].includes(state.me.role)) await loadStaffTable();
   } catch (err) {
     toast('Could not refresh the selected month: ' + err.message, 'error', 5500);
   } finally {
@@ -580,7 +580,7 @@ function updateWorkspaceHero() {
   el('heroScheduleDetail').textContent = state.schedule
     ? `${rostered.toLocaleString()} people represented · ${assignments.length.toLocaleString()} recorded assignments`
     : `No schedule loaded for ${state.month || 'this period'}`;
-  el('heroDescription').textContent = state.me.role === 'admin'
+  el('heroDescription').textContent = ['admin', 'duty_ops_manager'].includes(state.me.role)
     ? 'Coordinate staffing, coverage and operational readiness across your desk.'
     : 'Your shifts, leave and team coordination — clearly organised in one place.';
   root.dataset.scheduleState = status || 'empty';
@@ -686,7 +686,7 @@ function renderSwaps() {
       </div>`;
     return;
   }
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
   container.innerHTML = state.swaps.map(s => {
     const isMine = s.from_staff_id === state.me.id;
     const id = escHtml(s.id);
@@ -778,7 +778,7 @@ function renderGrid() {
   const month   = state.schedule.month;
   const nDays   = daysInMonth(month);
   const codes   = DEPT_CODES[state.department];
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
 
   // Filter to this department's assignments
   // Staff IDs are external data; use a null-prototype map so values such as
