@@ -218,6 +218,93 @@ export default {
         }
         return null;
       }
+      async function validateReliefAssignment(input, ignoreId = null) {
+        const { staff_id, duty_date, target_department_id, shift_code } = input;
+        const display_code = input.display_code || shift_code;
+        if (typeof staff_id !== 'string' || !isValidCalendarDate(duty_date)
+          || typeof target_department_id !== 'string'
+          || typeof input.reason !== 'string' || input.reason.trim().length < 12 || input.reason.length > 1000) {
+          return { ok: false, status: 400, error: 'Staff, date, target team, shift and a detailed operational reason are required' };
+        }
+        if (!['D','N','DC','NC'].includes(shift_code) || !['D','N','DC','NC','FSA'].includes(display_code)
+          || (display_code !== 'FSA' && display_code !== shift_code)) {
+          return { ok: false, status: 400, error: 'Use the target desk shift code; FSA is reserved for an approved Field Supervisor deployment' };
+        }
+        const targetDepartment = await env.DB.prepare(
+          'SELECT id, day_code, night_code FROM departments WHERE id = ? AND operational_team = 1'
+        ).bind(target_department_id).first();
+        if (!targetDepartment || ![targetDepartment.day_code, targetDepartment.night_code].includes(shift_code)) {
+          return { ok: false, status: 400, error: 'The selected shift code does not belong to the target desk' };
+        }
+        const person = await env.DB.prepare(
+          'SELECT id, name, department_id, active FROM staff WHERE id = ?'
+        ).bind(staff_id).first();
+        if (!person?.active) return { ok: false, status: 404, error: 'Active employee not found' };
+        if (person.department_id === target_department_id) {
+          return { ok: false, status: 409, error: 'This is the employee’s home desk; use the normal roster allocation instead of cross-team relief' };
+        }
+        const qualification = await env.DB.prepare(
+          'SELECT can_day, can_night, relief_only FROM staff_department_qualifications ' +
+          'WHERE staff_id = ? AND department_id = ? AND effective_from <= ? ' +
+          'AND (effective_to IS NULL OR effective_to >= ?) ORDER BY effective_from DESC LIMIT 1'
+        ).bind(staff_id, target_department_id, duty_date, duty_date).first();
+        if (!qualification || qualification.relief_only !== 1) {
+          return { ok: false, status: 409, error: 'No effective relief-only qualification exists for this employee and desk' };
+        }
+        const isNight = shift_code === targetDepartment.night_code;
+        if (isNight ? qualification.can_night !== 1 : qualification.can_day !== 1) {
+          return { ok: false, status: 409, error: 'The employee is not qualified for that shift type on the target desk' };
+        }
+        if (display_code === 'FSA') {
+          const designation = await env.DB.prepare(
+            'SELECT designation, relief_capable FROM workforce_staff_designations WHERE staff_id = ?'
+          ).bind(staff_id).first();
+          if (designation?.designation !== 'Field Supervisor' || designation.relief_capable !== 1) {
+            return { ok: false, status: 409, error: 'FSA display is restricted to an authorised Field Supervisor' };
+          }
+        }
+        const policy = await env.DB.prepare(
+          'SELECT night_mode FROM staff_shift_policies WHERE staff_id = ?'
+        ).bind(staff_id).first();
+        if (isNight && policy?.night_mode && policy.night_mode !== 'allowed') {
+          const exception = policy.night_mode === 'exception_only'
+            ? await env.DB.prepare(
+                "SELECT id FROM workforce_shift_exceptions WHERE staff_id = ? AND date = ? AND shift_code = ? AND status = 'approved'"
+              ).bind(staff_id, duty_date, shift_code).first()
+            : null;
+          if (!exception) return { ok: false, status: 409, error: 'Night work is not permitted without the separately approved date-specific exception' };
+        }
+        const leave = await env.DB.prepare(
+          "SELECT id FROM leave_requests WHERE staff_id = ? AND date = ? AND status = 'approved'"
+        ).bind(staff_id, duty_date).first();
+        if (leave) return { ok: false, status: 409, error: 'The employee has approved leave on this date' };
+        const training = await env.DB.prepare(
+          "SELECT id FROM workforce_staff_markers WHERE staff_id = ? AND date = ? AND marker_code = 'T' AND status = 'approved'"
+        ).bind(staff_id, duty_date).first();
+        if (training) return { ok: false, status: 409, error: 'The employee is marked as a trainee on this date' };
+        const pendingOrApproved = await env.DB.prepare(
+          "SELECT id FROM workforce_relief_assignments WHERE staff_id = ? AND duty_date = ? AND status IN ('pending','approved')"
+        ).bind(staff_id, duty_date).first();
+        if (pendingOrApproved && pendingOrApproved.id !== ignoreId) {
+          return { ok: false, status: 409, error: 'This employee already has a pending or approved deployment on this date' };
+        }
+        const existing = await env.DB.prepare(
+          'SELECT sa.shift_code, sa.coverage_department_id, sa.coverage_shift_code ' +
+          'FROM shift_assignments sa JOIN schedules sc ON sc.id = sa.schedule_id ' +
+          'WHERE sa.staff_id = ? AND sa.date = ? AND sc.month = ? ' +
+          'AND sc.id = (SELECT latest.id FROM schedules latest WHERE latest.month = sc.month ' +
+          'AND latest.department_id = sc.department_id ORDER BY latest.generated_at DESC LIMIT 1)'
+        ).bind(staff_id, duty_date, duty_date.slice(0, 7)).all();
+        for (const assignment of existing.results || []) {
+          const isRestOrLeave = ['O','L','PL','ML','SL'].includes(assignment.shift_code);
+          const sameReliefMirror = assignment.coverage_department_id === target_department_id
+            && assignment.coverage_shift_code === shift_code;
+          if (!isRestOrLeave && !sameReliefMirror) {
+            return { ok: false, status: 409, error: 'The employee is already rostered for another assignment on this date; resolve the existing roster before approving relief' };
+          }
+        }
+        return { ok: true, person, qualification, targetDepartment, display_code };
+      }
 
       // ── Admin: reset another staff member's PIN ───────────────────────
       if (pathname === '/api/auth/reset-pin' && request.method === 'POST') {
@@ -322,6 +409,131 @@ export default {
           env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'qualification.updated', 'staff_qualification', body.staff_id + ':' + body.department_id, JSON.stringify({ department_id: body.department_id, can_day: day, can_night: night, effective_from: body.effective_from }))
         ]);
         return json({ ok: true }, { status: 201 });
+      }
+
+
+      if (pathname === '/api/workforce/relief-assignments' && request.method === 'GET') {
+        const denied = requireAnyPermission('coverage.read');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          'SELECT r.*, s.name AS staff_name, s.department_id AS home_department_id, ' +
+          'd.name AS target_department_name, a.name AS requester_name, v.name AS reviewer_name ' +
+          'FROM workforce_relief_assignments r JOIN staff s ON s.id=r.staff_id ' +
+          'JOIN departments d ON d.id=r.target_department_id JOIN staff a ON a.id=r.requested_by ' +
+          'LEFT JOIN staff v ON v.id=r.reviewed_by WHERE r.duty_date LIKE ? ORDER BY r.duty_date,r.created_at'
+        ).bind(month + '-%').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/relief-assignments' && request.method === 'POST') {
+        const denied = requireAnyPermission('coverage.allocate');
+        if (denied) return denied;
+        const body = await request.json();
+        const checked = await validateReliefAssignment(body);
+        if (!checked.ok) return json({ error: checked.error }, { status: checked.status });
+        const id = uuid();
+        try {
+          await env.DB.batch([
+            env.DB.prepare(
+              "INSERT INTO workforce_relief_assignments (id,staff_id,duty_date,target_department_id,shift_code,display_code,reason,status,requested_by) VALUES (?,?,?,?,?,?,?,'pending',?)"
+            ).bind(id, body.staff_id, body.duty_date, body.target_department_id, body.shift_code, checked.display_code, body.reason.trim(), me.id),
+            env.DB.prepare(
+              "INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,'relief.requested','workforce_relief_assignment',?,?)"
+            ).bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, duty_date: body.duty_date, target_department_id: body.target_department_id, shift_code: body.shift_code, display_code: checked.display_code }))
+          ]);
+        } catch (error) {
+          if (String(error?.message || error).toLowerCase().includes('unique')) {
+            return json({ error: 'This employee already has a pending or approved deployment on this date' }, { status: 409 });
+          }
+          throw error;
+        }
+        return json({ id, status: 'pending' }, { status: 201 });
+      }
+
+      const reliefMatch = pathname.match(/^\/api\/workforce\/relief-assignments\/([^/]+)$/);
+      if (reliefMatch && request.method === 'PATCH') {
+        const denied = requireAnyPermission('exceptions.approve');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!['approved','rejected'].includes(body.status)) return json({ error: 'status must be approved or rejected' }, { status: 400 });
+        const relief = await env.DB.prepare(
+          'SELECT * FROM workforce_relief_assignments WHERE id = ?'
+        ).bind(reliefMatch[1]).first();
+        if (!relief) return json({ error: 'Relief request not found' }, { status: 404 });
+        if (relief.status !== 'pending') return json({ error: 'Only pending relief requests can be reviewed' }, { status: 409 });
+        if (relief.requested_by === me.id) return json({ error: 'A requester cannot approve their own relief deployment' }, { status: 403 });
+        if (body.status === 'approved') {
+          const checked = await validateReliefAssignment({
+            staff_id: relief.staff_id, duty_date: relief.duty_date,
+            target_department_id: relief.target_department_id, shift_code: relief.shift_code,
+            display_code: relief.display_code, reason: relief.reason,
+          }, relief.id);
+          if (!checked.ok) return json({ error: 'Relief can no longer be approved: ' + checked.error }, { status: 409 });
+        }
+        const updated = await env.DB.prepare(
+          "UPDATE workforce_relief_assignments SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = 'pending'"
+        ).bind(body.status, me.id, new Date().toISOString(), relief.id).run();
+        if (!updated.meta?.changes) return json({ error: 'Relief request changed; refresh and retry' }, { status: 409 });
+        await env.DB.prepare(
+          'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
+        ).bind(me.id, 'relief.' + body.status, 'workforce_relief_assignment', relief.id,
+          JSON.stringify({ staff_id: relief.staff_id, duty_date: relief.duty_date, target_department_id: relief.target_department_id, shift_code: relief.shift_code })).run();
+        return json({ ok: true, status: body.status });
+      }
+
+      if (pathname === '/api/workforce/staff-markers' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          "SELECT m.*, s.name AS staff_name FROM workforce_staff_markers m JOIN staff s ON s.id=m.staff_id WHERE m.date LIKE ? AND m.status='approved' ORDER BY m.date,s.name"
+        ).bind(month + '-%').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/staff-markers' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)
+          || body.marker_code !== 'T' || typeof body.reason !== 'string'
+          || body.reason.trim().length < 12 || body.reason.length > 1000) {
+          return json({ error: 'A valid employee, trainee date and detailed training note are required' }, { status: 400 });
+        }
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        if (!target?.active) return json({ error: 'Active employee not found' }, { status: 404 });
+        const [leave, relief, schedule] = await Promise.all([
+          env.DB.prepare("SELECT id FROM leave_requests WHERE staff_id=? AND date=? AND status='approved'").bind(body.staff_id, body.date).first(),
+          env.DB.prepare("SELECT id FROM workforce_relief_assignments WHERE staff_id=? AND duty_date=? AND status IN ('pending','approved')").bind(body.staff_id, body.date).first(),
+          env.DB.prepare(
+            'SELECT sa.shift_code FROM shift_assignments sa JOIN schedules sc ON sc.id=sa.schedule_id ' +
+            'WHERE sa.staff_id=? AND sa.date=? AND sc.id=(SELECT latest.id FROM schedules latest ' +
+            'WHERE latest.month=sc.month AND latest.department_id=sc.department_id ORDER BY latest.generated_at DESC LIMIT 1)'
+          ).bind(body.staff_id, body.date).first()
+        ]);
+        if (leave || relief || (schedule && !['O','L','PL','ML','SL'].includes(schedule.shift_code))) {
+          return json({ error: 'Training cannot overlap approved leave, active relief or an existing rostered shift' }, { status: 409 });
+        }
+        const id = uuid();
+        try {
+          await env.DB.batch([
+            env.DB.prepare(
+              "INSERT INTO workforce_staff_markers (id,staff_id,date,marker_code,reason,status,created_by) VALUES (?,?,?,'T',?,'approved',?)"
+            ).bind(id, body.staff_id, body.date, body.reason.trim(), me.id),
+            env.DB.prepare(
+              "INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,'training.recorded','staff_schedule_marker',?,?)"
+            ).bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, date: body.date, marker_code: 'T' }))
+          ]);
+        } catch (error) {
+          if (String(error?.message || error).toLowerCase().includes('unique')) {
+            return json({ error: 'A schedule marker already exists for this employee and date' }, { status: 409 });
+          }
+          throw error;
+        }
+        return json({ id, status: 'approved', marker_code: 'T' }, { status: 201 });
       }
 
       if (pathname === '/api/workforce/shift-exceptions' && request.method === 'GET') {
@@ -663,14 +875,18 @@ export default {
         if (body.status !== undefined && !['approved', 'pending'].includes(body.status)) {
           return json({ error: 'status must be approved or pending' }, { status: 400 });
         }
+        const leaveType = body.leave_type || 'L';
+        if (!['L','PL','ML','SL'].includes(leaveType)) {
+          return json({ error: 'leave_type must be L, PL, ML or SL' }, { status: 400 });
+        }
         const target = await env.DB.prepare('SELECT id FROM staff WHERE id = ? AND active = 1').bind(body.staff_id).first();
         if (!target) return json({ error: 'Active staff account not found' }, { status: 404 });
         const id = uuid();
         await env.DB.prepare(
-          'INSERT INTO leave_requests (id, staff_id, date, status) VALUES (?, ?, ?, ?) ' +
-          'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status'
-        ).bind(id, body.staff_id, body.date, body.status || 'approved').run();
-        return json({ id, ...body }, { status: 201 });
+          'INSERT INTO leave_requests (id, staff_id, date, status, leave_type) VALUES (?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status, leave_type = excluded.leave_type'
+        ).bind(id, body.staff_id, body.date, body.status || 'approved', leaveType).run();
+        return json({ id, ...body, leave_type: leaveType }, { status: 201 });
       }
 
       if (pathname.startsWith('/api/leave/') && request.method === 'DELETE') {
