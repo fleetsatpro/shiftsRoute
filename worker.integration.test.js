@@ -151,6 +151,21 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const rotaResult = await rotaGenerate.json();
     assert.equal(rotaResult.assigned_days, 31);
     assert.equal(rotaResult.uncovered_dates.length, 0);
+    const rotaResponse = await fetch(baseUrl + '/api/workforce/duty-rota?month=2026-12', { headers: { cookie: griffinCookie } });
+    assert.equal(rotaResponse.status, 200);
+    const rotaRows = await rotaResponse.json();
+    assert.equal(rotaRows.length, 31);
+    assert.ok(rotaRows.every(row => row.manager_staff_id && row.status === 'assigned'));
+    assert.ok(rotaRows.some(row => row.coverage_department_id === 'ISOC'));
+    assert.ok(rotaRows.some(row => row.coverage_department_id === 'SCE'));
+    for (const managerId of ['hilda','mukasa']) {
+      let streak = 0;
+      for (const row of rotaRows) {
+        if (row.manager_staff_id === managerId) streak++;
+        else streak = 0;
+        assert.ok(streak <= 5, managerId + ' exceeds the configured Duty Ops work streak');
+      }
+    }
 
     const hildaCookie = await enrollAccount('hilda', '624811', enrollmentCodes.hilda);
     const hildaProfile = await (await fetch(baseUrl + '/api/auth/me', { headers: { cookie: hildaCookie } })).json();
