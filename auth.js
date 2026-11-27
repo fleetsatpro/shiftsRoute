@@ -3,15 +3,14 @@
 // Lightweight PIN-based auth for Cloudflare Workers + D1.
 //
 // Flow:
-//  - First login: staff picks themselves from a list, sets a 4-6 digit PIN
-//    (pin_set goes 0 -> 1, pin_hash stored as SHA-256 hex).
-//  - Subsequent logins: staff picks themselves, enters PIN, server checks
-//    hash match.
-//  - On success, a session token (random UUID) is created in `sessions`
-//    with a 30-day expiry and returned to the client as an HttpOnly cookie.
-//  - Every API request (except /api/auth/*) requires a valid session
-//    cookie; the resolved staff record (id, name, department_id, role)
-//    is attached to the request context.
+//  - Staff enroll with a one-time code and an exactly six-digit PIN.
+//  - PINs are derived with PBKDF2-SHA-256 using a per-staff 128-bit random
+//    salt. Legacy unsalted SHA-256 hashes are upgraded after successful login.
+//  - Successful authentication creates a random 256-bit session token. Only
+//    its SHA-256 verifier is stored in D1; the token is issued as an HttpOnly
+//    cookie and expires after seven days.
+//  - Every protected API request resolves that cookie to an active staff
+//    record (id, name, department_id, role).
 
 const SESSION_DAYS = 7;
 const SESSION_COOKIE = 'roc_session';
@@ -54,7 +53,14 @@ export function parseCookies(request) {
   for (const part of header.split(';')) {
     const [k, ...v] = part.trim().split('=');
     if (!k) continue;
-    out[k] = decodeURIComponent(v.join('='));
+    const rawValue = v.join('=');
+    // Cookies are untrusted input. A malformed percent-escape must not turn
+    // an unauthenticated request into a Worker 500 response.
+    try {
+      out[k] = decodeURIComponent(rawValue);
+    } catch {
+      out[k] = rawValue;
+    }
   }
   return out;
 }
