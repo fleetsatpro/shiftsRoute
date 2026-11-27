@@ -611,8 +611,9 @@ export default {
             ).bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, duty_date: body.duty_date, target_department_id: body.target_department_id, shift_code: body.shift_code, display_code: checked.display_code }))
           ]);
         } catch (error) {
-          if (String(error?.message || error).toLowerCase().includes('unique')) {
-            return json({ error: 'This employee already has a pending or approved deployment on this date' }, { status: 409 });
+          const message = String(error?.message || error);
+          if (/unique|conflict|shortage|leave|training|rostered|deployment/i.test(message)) {
+            return json({ error: 'The relief request conflicts with availability, another assignment or the remaining staffing shortage. Refresh the roster and review the date.' }, { status: 409 });
           }
           throw error;
         }
@@ -641,13 +642,22 @@ export default {
           if (!checked.ok) return json({ error: 'Relief can no longer be approved: ' + checked.error }, { status: 409 });
           checkedShortage = checked.shortage;
         }
-        const updated = await env.DB.prepare(
-          "UPDATE workforce_relief_assignments SET status = ?, reviewed_by = ?, reviewed_at = ?, shortage_count_at_request = ?, minimum_required = ?, shortage_confirmed_at = ? WHERE id = ? AND status = 'pending'"
-        ).bind(body.status, me.id, new Date().toISOString(),
-          checkedShortage?.covered ?? relief.shortage_count_at_request,
-          checkedShortage?.minimum ?? relief.minimum_required,
-          checkedShortage ? new Date().toISOString() : relief.shortage_confirmed_at,
-          relief.id).run();
+        let updated;
+        try {
+          updated = await env.DB.prepare(
+            "UPDATE workforce_relief_assignments SET status = ?, reviewed_by = ?, reviewed_at = ?, shortage_count_at_request = ?, minimum_required = ?, shortage_confirmed_at = ? WHERE id = ? AND status = 'pending'"
+          ).bind(body.status, me.id, new Date().toISOString(),
+            checkedShortage?.covered ?? relief.shortage_count_at_request,
+            checkedShortage?.minimum ?? relief.minimum_required,
+            checkedShortage ? new Date().toISOString() : relief.shortage_confirmed_at,
+            relief.id).run();
+        } catch (error) {
+          const message = String(error?.message || error);
+          if (/unique|conflict|shortage|leave|training|rostered|deployment/i.test(message)) {
+            return json({ error: 'Relief can no longer be approved because availability, another assignment or remaining desk capacity changed. Review the roster and submit a new request.' }, { status: 409 });
+          }
+          throw error;
+        }
         if (!updated.meta?.changes) return json({ error: 'Relief request changed; refresh and retry' }, { status: 409 });
         await env.DB.prepare(
           'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
@@ -805,8 +815,9 @@ export default {
             ).bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, date: body.date, marker_code: 'T' }))
           ]);
         } catch (error) {
-          if (String(error?.message || error).toLowerCase().includes('unique')) {
-            return json({ error: 'A schedule marker already exists for this employee and date' }, { status: 409 });
+          const message = String(error?.message || error);
+          if (/unique|conflict|leave|relief|rostered|assignment/i.test(message)) {
+            return json({ error: 'Training conflicts with existing leave, relief or rostered work. Refresh the roster and select an available date.' }, { status: 409 });
           }
           throw error;
         }
@@ -1172,10 +1183,18 @@ export default {
           return json({ error: 'Leave cannot overlap an approved trainee assignment' }, { status: 409 });
         }
         const id = uuid();
-        await env.DB.prepare(
-          'INSERT INTO leave_requests (id, staff_id, date, status, leave_type) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status, leave_type = excluded.leave_type'
-        ).bind(id, body.staff_id, body.date, body.status || 'approved', leaveType).run();
+        try {
+          await env.DB.prepare(
+            'INSERT INTO leave_requests (id, staff_id, date, status, leave_type) VALUES (?, ?, ?, ?, ?) ' +
+            'ON CONFLICT(staff_id, date) DO UPDATE SET status = excluded.status, leave_type = excluded.leave_type'
+          ).bind(id, body.staff_id, body.date, body.status || 'approved', leaveType).run();
+        } catch (error) {
+          const message = String(error?.message || error);
+          if (/unique|conflict|relief|training/i.test(message)) {
+            return json({ error: 'Leave conflicts with a pending or approved relief deployment or trainee assignment. Resolve the existing record first.' }, { status: 409 });
+          }
+          throw error;
+        }
         return json({ id, ...body, leave_type: leaveType }, { status: 201 });
       }
 
