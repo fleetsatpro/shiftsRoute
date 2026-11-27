@@ -43,3 +43,17 @@ test('dialogs support keyboard dismissal and focus containment', async () => {
   assert.match(app, /first\.focus\(\)/);
   assert.match(app, /last\.focus\(\)/);
 });
+
+test('premium theme system exposes five palettes, persists selection, and respects reduced motion', async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL('./public/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('./public/app.js', import.meta.url), 'utf8'),
+  ]);
+  for (const theme of ['aurora', 'obsidian', 'amethyst', 'ember', 'arctic']) {
+    assert.match(html, new RegExp('value="' + theme + '"'));
+    if (theme !== 'aurora') assert.ok(html.includes('[data-theme="' + theme + '"]'));
+  }
+  assert.match(html, /prefers-reduced-motion:\s*reduce/);
+  assert.match(app, /localStorage\.setItem\('shiftsroute-theme'/);
+  assert.match(app, /localStorage\.getItem\('shiftsroute-theme'/);
+});
