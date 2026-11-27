@@ -31,11 +31,11 @@ A cross-desk request requires:
 2. An uncovered minimum for the exact date and day/night code after counting ordinary staff and pending/approved relief.
 3. An active employee with an effective-dated relief-only qualification for the requested desk and shift.
 4. No pending/approved leave, trainee marker, same-date duty, active relief or conflicting rotation.
-5. Compliance with the employee's night-work policy, cross-desk night-to-day rule and maximum consecutive work-day limit.
+5. Compliance with the employee's night-work policy, the stricter of the home and receiving desk night-to-day recovery rules, and maximum consecutive work-day limit across both teams.
 6. A reason describing the operational shortage.
 7. Approval by a different Duty Ops Manager or the platform administrator.
 
-Pending and approved requests reserve one slot of the remaining shortage. D1 capacity triggers prevent simultaneous requests from exceeding that minimum. The API rechecks shortage and eligibility at approval; the receiving desk must be regenerated after approval to materialize the relief into its roster. The employee's home-team schedule is also regenerated so the borrowed day remains visible without being counted twice.
+Pending and approved requests reserve one slot of the remaining shortage. D1 capacity triggers prevent simultaneous requests from exceeding that minimum. Additional D1 triggers make pending/approved leave, trainee markers and relief mutually exclusive at the database write boundary, even if two requests race. The API rechecks shortage and eligibility at approval; the receiving desk must be regenerated after approval to materialize the relief into its roster. The employee's home-team schedule is also regenerated so the borrowed day remains visible without being counted twice.
 
 ## Named workforce records
 
