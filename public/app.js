@@ -677,16 +677,17 @@ function renderLeaveList() {
 
 // ── Team grid render ───────────────────────────────────────
 function renderGrid() {
-  // Warnings banner (BUG FIX: parse actual warnings from notes, not string include)
   const box = el('warningsBox');
-  box.innerHTML = '';
-  if (state.schedule?.notes && state.schedule.notes.startsWith('Warnings:')) {
-    const warningText = state.schedule.notes.replace(/^Warnings:\s*/, '');
-    box.innerHTML = `
-      <div class="warnings-banner" style="margin:14px 18px 0;">
-        <strong>⚠ Coverage warnings</strong>
-        ${warningText}
-      </div>`;
+  box.replaceChildren();
+  if (typeof state.schedule?.notes === 'string' && state.schedule.notes.startsWith('Warnings:')) {
+    const banner = document.createElement('div');
+    banner.className = 'warnings-banner';
+    const heading = document.createElement('strong');
+    heading.textContent = 'Coverage warnings';
+    const message = document.createElement('p');
+    message.textContent = state.schedule.notes.replace(/^Warnings:\\s*/, '');
+    banner.append(heading, message);
+    box.appendChild(banner);
   }
 
   el('teamGridMonth').textContent = state.month;
@@ -714,7 +715,7 @@ function renderGrid() {
   for (const row of state.schedule.assignments) {
     if (row.department_id !== state.department) continue;
     if (!byStaff[row.staff_id]) byStaff[row.staff_id] = { name: row.staff_name, days: {} };
-    byStaff[row.staff_id].days[row.date] = { code: row.shift_code, override: !!row.is_manual_override };
+    byStaff[row.staff_id].days[row.date] = { code: safeShiftCode(row.shift_code), override: !!row.is_manual_override };
   }
 
   if (!Object.keys(byStaff).length) {
@@ -768,15 +769,16 @@ function renderGrid() {
     for (let d = 1; d <= nDays; d++) {
       const ds   = dateStr(month, d);
       const cell = days[ds] || { code: 'O', override: false };
-      const code = cell.code;
-      if (code === codes.day)   dayCount++;
+      const code = safeShiftCode(cell.code);
+      if (code === codes.day) dayCount++;
       else if (code === codes.night) nightCount++;
-      else if (code === 'L')    leaveCount++;
+      else if (code === 'L') leaveCount++;
       const wk = isWeekend(month, d) ? ' weekend' : '';
       const ov = cell.override ? ' override' : '';
       const locked = isAdmin ? '' : ' locked';
-      html += `<td class="${wk}${ov}" title="${ds}: ${SHIFT_LABEL[code]}${cell.override ? ' (manual)' : ''}">
-        <button class="cell shift-${code}${locked}" data-staff="${staffId}" data-date="${ds}" data-code="${code}">${code}</button>
+      const title = `${ds}: ${SHIFT_LABEL[code] || code}${cell.override ? ' (manual)' : ''}`;
+      html += `<td class="${wk}${ov}" title="${escHtml(title)}">
+        <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${ds}" data-code="${code}" aria-label="${escHtml(name)} on ${ds}: ${code}" ${isAdmin ? '' : 'disabled'}>${code}</button>
       </td>`;
     }
     html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount}</td></tr>`;
@@ -784,8 +786,13 @@ function renderGrid() {
   html += '</tbody></table>';
   wrap.innerHTML = html;
 
-  if (isAdmin) {
-    qsa('.cell:not(.locked)', wrap).forEach(btn => btn.addEventListener('click', onCellClick));
+  // One delegated listener survives grid re-renders without accumulating handlers.
+  if (!wrap.dataset.bound) {
+    wrap.addEventListener('click', e => {
+      const button = e.target.closest('.cell:not(.locked)');
+      if (button && wrap.contains(button)) onCellClick({ currentTarget: button });
+    });
+    wrap.dataset.bound = '1';
   }
 
   renderTotals(byStaff, month, codes);
@@ -823,18 +830,20 @@ function renderTotals(byStaff, month, codes) {
 
 // ── Cell click (grid override) ─────────────────────────────
 async function onCellClick(e) {
-  const btn  = e.currentTarget;
+  const btn = e.currentTarget;
+  if (btn.disabled || btn.dataset.saving === '1') return;
   const staffId = btn.dataset.staff;
-  const date    = btn.dataset.date;
-  const current = btn.dataset.code;
-  const cycle   = CYCLE_ORDER[state.department];
-  const next    = cycle[(cycle.indexOf(current) + 1) % cycle.length];
-
-  // Optimistic UI update
-  btn.className = `cell shift-${next}`;
-  btn.textContent = next;
-  btn.dataset.code = next;
-  btn.closest('td').classList.add('override');
+  const date = btn.dataset.date;
+  const current = safeShiftCode(btn.dataset.code);
+  const cycle = CYCLE_ORDER[state.department];
+  const currentIndex = cycle.indexOf(current);
+  if (currentIndex < 0) return;
+  const next = cycle[(currentIndex + 1) % cycle.length];
+  const cell = btn.closest('td');
+  const wasOverride = cell.classList.contains('override');
+  btn.dataset.saving = '1';
+  btn.disabled = true;
+  btn.textContent = '…';
 
   try {
     await api(`/schedules/${state.schedule.id}/assignment`, {
@@ -842,13 +851,18 @@ async function onCellClick(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staff_id: staffId, date, shift_code: next }),
     });
-    // Silently refresh schedule data in background (don't re-render grid to avoid scroll jump)
-    api(`/schedules/${state.schedule.id}`).then(s => { state.schedule = s; renderStatus(); }).catch(() => {});
-  } catch(err) {
-    // Revert on failure
-    btn.className = `cell shift-${current}`;
+    const scrollLeft = el('gridWrap').scrollLeft;
+    const scrollTop = el('gridWrap').scrollTop;
+    state.schedule = await api(`/schedules/${state.schedule.id}`);
+    renderGrid();
+    el('gridWrap').scrollLeft = scrollLeft;
+    el('gridWrap').scrollTop = scrollTop;
+    toast(`${date}: ${next} saved.`, 'success', 1800);
+  } catch (err) {
+    btn.disabled = false;
     btn.textContent = current;
-    btn.dataset.code = current;
+    btn.dataset.saving = '0';
+    if (!wasOverride) cell.classList.remove('override');
     toast('Update failed: ' + err.message, 'error');
   }
 }
