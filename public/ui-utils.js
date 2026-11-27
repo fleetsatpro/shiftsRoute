@@ -8,7 +8,7 @@ export function escHtml(value) {
 }
 
 export function safeShiftCode(value) {
-  return ['D', 'N', 'DC', 'NC', 'O', 'L'].includes(value) ? value : 'O';
+  return ['D', 'N', 'DC', 'NC', 'O', 'L', 'PL', 'ML', 'SL', 'T', 'FSA'].includes(value) ? value : '?';
 }
 
 export function safeStatus(value) {
