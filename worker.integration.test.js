@@ -88,12 +88,14 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(scopedStaff.status, 200);
     const staffRows = await scopedStaff.json();
     assert.ok(staffRows.length >= 10);
-    assert.ok(staffRows.every(person => person.department_id === 'ISOC'));
+    assert.ok(staffRows.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(staffRows.some(person => person.id === 'mukasa' && person.department_id === 'ROC'));
 
     const deniedCrossDepartment = await fetch(baseUrl + '/api/staff?department=SCE', { headers: { cookie: sessionCookie } });
     assert.equal(deniedCrossDepartment.status, 200);
     const ownScope = await deniedCrossDepartment.json();
-    assert.ok(ownScope.every(person => person.department_id === 'ISOC'));
+    assert.ok(ownScope.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(ownScope.some(person => person.id === 'mukasa'), 'cross-qualified Duty Ops Manager should be visible in ISOC roster');
 
     const badLogin = await fetch(baseUrl + '/api/auth/login', {
       method: 'POST',
