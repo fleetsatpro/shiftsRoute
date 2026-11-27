@@ -275,7 +275,7 @@ export default {
           if (!exception) return { ok: false, status: 409, error: 'Night work is not permitted without the separately approved date-specific exception' };
         }
         const leave = await env.DB.prepare(
-          "SELECT id FROM leave_requests WHERE staff_id = ? AND date = ? AND status = 'approved'"
+          "SELECT id FROM leave_requests WHERE staff_id = ? AND date = ? AND status IN ('pending','approved')"
         ).bind(staff_id, duty_date).first();
         if (leave) return { ok: false, status: 409, error: 'The employee has approved leave on this date' };
         const training = await env.DB.prepare(
@@ -562,7 +562,7 @@ export default {
         const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
         if (!target?.active) return json({ error: 'Active employee not found' }, { status: 404 });
         const [leave, relief, schedule] = await Promise.all([
-          env.DB.prepare("SELECT id FROM leave_requests WHERE staff_id=? AND date=? AND status='approved'").bind(body.staff_id, body.date).first(),
+          env.DB.prepare("SELECT id FROM leave_requests WHERE staff_id=? AND date=? AND status IN ('pending','approved')").bind(body.staff_id, body.date).first(),
           env.DB.prepare("SELECT id FROM workforce_relief_assignments WHERE staff_id=? AND duty_date=? AND status IN ('pending','approved')").bind(body.staff_id, body.date).first(),
           env.DB.prepare(
             'SELECT sa.shift_code FROM shift_assignments sa JOIN schedules sc ON sc.id=sa.schedule_id ' +
@@ -945,6 +945,18 @@ export default {
         }
         const target = await env.DB.prepare('SELECT id FROM staff WHERE id = ? AND active = 1').bind(body.staff_id).first();
         if (!target) return json({ error: 'Active staff account not found' }, { status: 404 });
+        const activeRelief = await env.DB.prepare(
+          "SELECT id FROM workforce_relief_assignments WHERE staff_id=? AND duty_date=? AND status IN ('pending','approved')"
+        ).bind(body.staff_id, body.date).first();
+        if (activeRelief) {
+          return json({ error: 'Leave cannot be recorded while a cross-desk relief request or approved deployment exists for this date; resolve the relief record first' }, { status: 409 });
+        }
+        const activeTraining = await env.DB.prepare(
+          "SELECT id FROM workforce_staff_markers WHERE staff_id=? AND date=? AND status='approved'"
+        ).bind(body.staff_id, body.date).first();
+        if (activeTraining) {
+          return json({ error: 'Leave cannot overlap an approved trainee assignment' }, { status: 409 });
+        }
         const id = uuid();
         await env.DB.prepare(
           'INSERT INTO leave_requests (id, staff_id, date, status, leave_type) VALUES (?, ?, ?, ?, ?) ' +
