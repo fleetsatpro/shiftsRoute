@@ -278,7 +278,7 @@ async function loadStaffTable() {
     const actions = [];
     if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="reset-pin" data-staff-id="${id}" data-staff-name="${name}">Reset PIN</button>`);
     if (s.role === 'staff') actions.push(`<button type="button" class="ghost" data-action="make-admin" data-staff-id="${id}" data-staff-name="${name}">Make admin</button>`);
-    else if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
+    else if (s.role === 'admin' && state.me.role === 'admin' && s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
     if (s.id !== state.me.id) actions.push(`<button type="button" class="danger" data-action="deactivate" data-staff-id="${id}" data-staff-name="${name}">Deactivate</button>`);
     return `
       <tr data-search="${escHtml([s.name, s.department_id, s.role].join(" ").toLowerCase())}">
