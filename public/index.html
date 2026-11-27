@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b0e14" />
 <title>ROC Shift Scheduler</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -743,15 +744,135 @@
     header { padding: 0 16px; }
     .header-right .user-chip span { display: none; }
   }
+  /* ── Responsive navigation and accessibility refinements ── */
+  :root {
+    --accent: #62e6d5;
+    --accent-dim: #176b67;
+    --accent-glow: rgba(98,230,213,.14);
+    --panel-glass: rgba(21,26,36,.88);
+    --shadow-card: 0 2px 8px rgba(0,0,0,.24), 0 14px 36px rgba(0,0,0,.2);
+  }
+  body {
+    background:
+      radial-gradient(900px 500px at 78% -10%, rgba(59,130,246,.10), transparent 65%),
+      radial-gradient(700px 480px at -15% 38%, rgba(98,230,213,.07), transparent 62%),
+      var(--bg);
+  }
+  header {
+    background: rgba(15,19,25,.88);
+    border-bottom-color: rgba(105,126,158,.22);
+    backdrop-filter: blur(18px) saturate(140%);
+  }
+  .panel {
+    background: linear-gradient(145deg, rgba(25,32,46,.96), rgba(17,22,32,.96));
+    border-color: rgba(105,126,158,.24);
+    box-shadow: var(--shadow-card);
+  }
+  .panel-header { background: linear-gradient(90deg, rgba(98,230,213,.035), transparent 65%); }
+  button, select, input { min-height: 38px; }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .skip-link {
+    position: fixed; top: 8px; left: 8px; z-index: 2000;
+    transform: translateY(-160%); padding: 10px 14px;
+    border-radius: 8px; background: var(--accent); color: #071c1b;
+    font-weight: 700; text-decoration: none;
+  }
+  .skip-link:focus { transform: translateY(0); }
+  .mobile-nav {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    background: rgba(15,19,25,.92);
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: thin;
+    position: sticky;
+    top: 56px;
+    z-index: 90;
+    backdrop-filter: blur(16px);
+  }
+  .mobile-nav .nav-btn {
+    width: auto; flex: 0 0 auto; min-height: 40px;
+    padding: 8px 13px; border: 1px solid transparent;
+    border-radius: 8px; white-space: nowrap;
+  }
+  .mobile-nav .nav-btn.active {
+    border: 1px solid rgba(98,230,213,.3);
+    background: rgba(98,230,213,.10);
+  }
+  .staff-actions, .swap-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .staff-actions button, .swap-actions button {
+    min-height: 34px; font-size: 11px; padding: 5px 9px;
+  }
+  .warnings-banner p { margin: 4px 0 0; white-space: pre-line; }
+  .modal-backdrop { overflow-y: auto; }
+  .modal { max-height: min(90vh, 720px); overflow-y: auto; }
+  .schedule { min-width: max-content; }
+  .schedule .name-col { min-width: 148px; }
+  .empty-state { color: var(--text-2); }
+  .empty-state .empty-hint { color: var(--text-3); }
+  @media (max-width: 768px) {
+    .app-body { display: flex; flex-direction: column; }
+    aside { display: none; }
+    .mobile-nav { display: flex; }
+    main { padding: 16px 12px 36px; }
+    header { padding: 0 12px; height: 56px; }
+    .header-left { gap: 9px; }
+    .wordmark { font-size: 14px; }
+    .header-right { gap: 6px; }
+    .header-right .user-chip span { display: none; }
+    .controls-bar { gap: 8px; padding-bottom: 12px; }
+    .controls-bar .ctrl-group { flex: 1 1 130px; }
+    .controls-bar select, .controls-bar input { min-width: 0; width: 100%; }
+    .controls-bar > button { flex: 1 1 auto; }
+    .page-title { align-items: flex-start; flex-direction: column; gap: 3px; margin-bottom: 14px; }
+    .panel { border-radius: 10px; }
+    .panel-header { padding: 12px 13px; }
+    .filter-bar { overflow-x: auto; }
+    .swap-row { align-items: flex-start; flex-wrap: wrap; padding: 12px; }
+    .swap-row .swap-detail { flex: 1 1 calc(100% - 90px); }
+    .swap-actions { width: 100%; justify-content: flex-end; }
+    .leave-form { align-items: stretch; }
+    .leave-form select, .leave-form input { flex: 1 1 140px; min-width: 0; }
+    .leave-form button { flex: 1 1 100%; }
+    .staff-table { min-width: 680px; }
+    .coverage-row { padding: 10px 12px; }
+    #toastContainer { left: 12px; right: 12px; bottom: 12px; }
+    .toast { max-width: none; }
+  }
+  @media (max-width: 420px) {
+    .dept-badge { font-size: 9px; padding: 3px 6px; }
+    .role-pill { display: none; }
+    .login-card { padding: 24px 20px; }
+    .my-schedule-grid { padding: 10px; }
+    .my-shift-row { gap: 7px; padding: 8px; }
+    .my-shift-row .shift-date { width: 74px; }
+    .controls-bar .ctrl-label { font-size: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
 </style>
 </head>
 <body>
+<a class="skip-link" href="#mainContent">Skip to content</a>
 
 <!-- Toast container -->
-<div id="toastContainer"></div>
+<div id="toastContainer" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <!-- Loading overlay -->
-<div id="loadingOverlay" class="loading-overlay hidden">
+<div id="loadingOverlay" class="loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">
   <div class="loading-card">
     <div class="spinner"></div>
     <div id="loadingMsg">Loading…</div>
@@ -784,7 +905,7 @@
 <div id="app" class="hidden">
   <header>
     <div class="header-left">
-      <span class="wordmark">ROC</span>
+      <span class="wordmark" aria-label="ROC Shift Scheduler">ROC <span style="color:var(--text-2);font-weight:400;letter-spacing:.03em;">SHIFT</span></span>
       <span id="deptBadge" class="dept-badge">–</span>
     </div>
     <div class="header-right">
@@ -799,17 +920,26 @@
   <div class="app-body">
     <aside>
       <div class="nav-section-label">My Workspace</div>
-      <button class="nav-btn" data-tab="mine"><i class="icon">◈</i> My Schedule</button>
-      <button class="nav-btn" data-tab="myLeave"><i class="icon">✦</i> My Leave</button>
-      <button class="nav-btn" data-tab="swaps"><i class="icon">⇄</i> Shift Swaps</button>
+      <button class="nav-btn" data-tab="mine">My Schedule</button>
+      <button class="nav-btn" data-tab="myLeave">My Leave</button>
+      <button class="nav-btn" data-tab="swaps">Shift Swaps</button>
 
       <div class="nav-section-label admin-only hidden" style="margin-top:8px;">Admin</div>
-      <button class="nav-btn admin-only hidden" data-tab="team"><i class="icon">▦</i> Team Grid</button>
-      <button class="nav-btn admin-only hidden" data-tab="leave"><i class="icon">⊘</i> Leave Manager</button>
-      <button class="nav-btn admin-only hidden" data-tab="staff"><i class="icon">⊕</i> Staff Manager</button>
+      <button class="nav-btn admin-only hidden" data-tab="team">Team Grid</button>
+      <button class="nav-btn admin-only hidden" data-tab="leave">Leave Manager</button>
+      <button class="nav-btn admin-only hidden" data-tab="staff">Staff Manager</button>
     </aside>
 
-    <main>
+    <nav class="mobile-nav" aria-label="Primary navigation">
+      <button class="nav-btn" data-tab="mine">My Schedule</button>
+      <button class="nav-btn" data-tab="myLeave">My Leave</button>
+      <button class="nav-btn" data-tab="swaps">Shift Swaps</button>
+      <button class="nav-btn admin-only hidden" data-tab="team">Team Grid</button>
+      <button class="nav-btn admin-only hidden" data-tab="leave">Leave Manager</button>
+      <button class="nav-btn admin-only hidden" data-tab="staff">Staff Manager</button>
+    </nav>
+
+    <main id="mainContent" tabindex="-1">
       <!-- Controls bar -->
       <div class="controls-bar">
         <div class="ctrl-group">
@@ -823,10 +953,10 @@
           <span class="ctrl-label">Month</span>
           <input type="month" id="month" />
         </div>
-        <button id="loadBtn">↺ Reload</button>
-        <button id="generateBtn" class="primary admin-only hidden">⚡ Generate</button>
-        <button id="publishBtn" class="admin-only hidden">✓ Publish</button>
-        <button id="exportBtn" disabled>↓ Export CSV</button>
+        <button id="loadBtn" type="button">Reload</button>
+        <button id="generateBtn" type="button" class="primary admin-only hidden">Generate schedule</button>
+        <button id="publishBtn" type="button" class="admin-only hidden">Publish schedule</button>
+        <button id="exportBtn" type="button" disabled>Export CSV</button>
         <span id="statusPill" class="status-pill hidden"></span>
       </div>
 
@@ -987,7 +1117,7 @@
 <!-- Add Staff modal -->
 <div id="addStaffModal" class="modal-backdrop hidden">
   <div class="modal">
-    <h3>Add Staff Member</h3>
+    <h3 id="addStaffTitle">Add Staff Member</h3>
     <label>Full name</label>
     <input type="text" id="newStaffName" placeholder="e.g. Jane Doe" />
     <label>Department</label>
@@ -1010,17 +1140,17 @@
 <!-- New Swap Request modal -->
 <div id="newSwapModal" class="modal-backdrop hidden">
   <div class="modal">
-    <h3>Request Shift Swap</h3>
-    <label>Your shift date</label>
+    <h3 id="newSwapTitle">Request Shift Swap</h3>
+    <label for="swapDate">Your shift date</label>
     <input type="date" id="swapDate" />
-    <label>Shift to give away</label>
+    <label for="swapShiftCode">Shift to give away</label>
     <select id="swapShiftCode">
       <option value="D">Day (D)</option>
       <option value="N">Night (N)</option>
       <option value="DC">Day (DC)</option>
       <option value="NC">Night (NC)</option>
     </select>
-    <label>Swap with</label>
+    <label for="swapToStaff">Swap with</label>
     <select id="swapToStaff"></select>
     <div class="modal-actions">
       <button id="cancelSwap" class="ghost">Cancel</button>
