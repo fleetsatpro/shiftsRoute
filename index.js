@@ -413,7 +413,7 @@ export default {
         }
         const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
         const { results: priorDutyDates } = await env.DB.prepare("SELECT manager_staff_id, duty_date FROM duty_ops_assignments WHERE manager_staff_id IS NOT NULL AND duty_date >= date(?, '-7 days') AND duty_date < ?").bind(body.month + '-01', body.month + '-01').all();
-        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a WHERE a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id WHERE s.status='published' AND a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
         const managerWorkDates = new Map(managers.results.map(manager => [manager.id, new Set()]));
         for (const row of [...priorDutyDates.map(row => ({ staff_id: row.manager_staff_id, date: row.duty_date })), ...priorShiftDates, ...assignedRows]) {
           if (managerWorkDates.has(row.staff_id)) managerWorkDates.get(row.staff_id).add(row.date);
