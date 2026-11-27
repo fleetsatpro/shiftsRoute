@@ -754,7 +754,9 @@ function renderGrid() {
   const isAdmin = state.me.role === 'admin';
 
   // Filter to this department's assignments
-  const byStaff = {};
+  // Staff IDs are external data; use a null-prototype map so values such as
+  // `constructor` or `__proto__` cannot collide with inherited object keys.
+  const byStaff = Object.create(null);
   for (const row of state.schedule.assignments) {
     if (row.department_id !== state.department) continue;
     if (!byStaff[row.staff_id]) byStaff[row.staff_id] = { name: row.staff_name, days: {} };
