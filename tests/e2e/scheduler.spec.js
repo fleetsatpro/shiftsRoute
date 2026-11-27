@@ -71,9 +71,9 @@ test('login screen loads directory and rejects a malformed PIN before network lo
   await expect(page.locator('#loginScreen')).toBeVisible();
 });
 
-test('admin can sign in, navigate to staff management, and filter the directory', async ({ page }, testInfo) => {
+test('admin can sign in, navigate to staff management, and filter the directory at each viewport', async ({ page }, testInfo) => {
   await installIsolatedApi(page, 'admin');
-  await page.setViewportSize({ width: 390, height: 844 });
+  const isMobile = page.viewportSize().width <= 768;
   await page.goto('/');
   await page.locator('#pinInput').fill('123456');
   await page.locator('#loginBtn').click();
@@ -82,7 +82,7 @@ test('admin can sign in, navigate to staff management, and filter the directory'
   await expect(page.locator('#meName')).toHaveText('Test Admin');
   await expect(page.locator('#tab-team')).toBeVisible();
 
-  await page.locator('.mobile-nav [data-tab="staff"]').click();
+  await page.locator(isMobile ? '.mobile-nav [data-tab="staff"]' : 'aside [data-tab="staff"]').click();
   await expect(page.locator('#tab-staff')).toBeVisible();
   await expect(page.locator('#staffTableBody tr')).toHaveCount(3);
 
@@ -90,10 +90,15 @@ test('admin can sign in, navigate to staff management, and filter the directory'
   await expect(page.locator('#staffTableBody tr:visible')).toHaveCount(1);
   await expect(page.locator('#staffTableBody tr:visible')).toContainText('Night Controller');
 
-  await expect(page.locator('aside')).toBeHidden();
-  await expect(page.locator('.mobile-nav')).toBeVisible();
-  await expect(page.locator('.mobile-nav')).toHaveCSS('display', 'flex');
-  await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-directory.png'), fullPage: true });
+  if (isMobile) {
+    await expect(page.locator('aside')).toBeHidden();
+    await expect(page.locator('.mobile-nav')).toBeVisible();
+    await expect(page.locator('.mobile-nav')).toHaveCSS('display', 'flex');
+  } else {
+    await expect(page.locator('aside')).toBeVisible();
+    await expect(page.locator('.mobile-nav')).toBeHidden();
+  }
+  await page.screenshot({ path: testInfo.outputPath(isMobile ? 'admin-mobile-staff-directory.png' : 'admin-desktop-staff-directory.png'), fullPage: true });
 });
 
 test('staff account cannot see admin navigation or privileged controls', async ({ page }) => {
