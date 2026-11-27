@@ -266,7 +266,8 @@ function improveBalance({
   priorFinalState, lockedAssignments = new Set(), assignmentMeta,
 }) {
   const iterations = 600;
-  const ids = staff.map(person => person.id);
+  const allIds = staff.map(person => person.id);
+  const ids = staff.filter(person => !(person.relief_only === 1 || person.relief_only === true)).map(person => person.id);
   const people = new Map(staff.map(person => [person.id, person]));
   const random = seededRandom(month + '|' + department.id + '|' + ids.slice().sort().join('|'));
 
@@ -304,7 +305,7 @@ function improveBalance({
   function coverageOk(day, code, removeId, addId) {
     let count = 0;
     const date = dateStr(month, day);
-    for (const id of ids) {
+    for (const id of allIds) {
       let current = state[id][day];
       let covered = assignmentMeta[id]?.[date]?.coverage_shift_code || current;
       if (id === removeId) { current = OFF; covered = OFF; }
@@ -338,6 +339,7 @@ function improveBalance({
     if ((busyCode !== dayCode && busyCode !== nightCode) || freeCode !== OFF) continue;
 
     const freePerson = people.get(free);
+    if (freePerson?.relief_only === 1 || freePerson?.relief_only === true) continue;
     if (busyCode === dayCode && freePerson?.can_day === 0) continue;
     if (busyCode === nightCode && freePerson?.can_night === 0 && !freePerson?.night_exception_dates?.includes(date)) continue;
 

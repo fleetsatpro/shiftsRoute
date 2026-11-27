@@ -175,3 +175,16 @@ test('fixed relief allocation is explicit and prevents a second regular shift on
   assert.equal(result.assignments.borrowed['2026-12-01'], 'D');
   assert.equal(result.assignments.primary['2026-12-01'], 'O');
 });
+
+test('balancing never converts an off-day on a relief-only colleague into routine coverage', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'primary-a', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'primary-b', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'relief-only', can_day: 1, can_night: 1, relief_only: 1, max_consecutive_days: 5 },
+    ],
+  });
+  for (const code of Object.values(result.assignments['relief-only'])) assert.equal(code, 'O');
+});
