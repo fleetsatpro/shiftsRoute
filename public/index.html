@@ -1322,7 +1322,8 @@
             <label class="ctrl-label" for="hrPolicyStaff">Employee</label><select id="hrPolicyStaff" required></select>
             <label class="ctrl-label" for="hrPolicyNight">Night work policy</label><select id="hrPolicyNight"><option value="allowed">Allowed</option><option value="restricted">Restricted</option><option value="exception_only">Emergency exception only</option><option value="prohibited">Prohibited</option></select>
             <label class="ctrl-label" for="hrPolicyStreak">Maximum consecutive work days</label><input id="hrPolicyStreak" type="number" min="1" max="7" value="5" required />
-            <label class="ctrl-label" for="hrPolicyRest">Minimum rest hours</label><input id="hrPolicyRest" type="number" min="8" max="24" value="11" required />
+            <label class="ctrl-label" for="hrPolicyRest">Minimum rest target (hours)</label><input id="hrPolicyRest" type="number" min="8" max="24" value="11" required />
+            <p class="muted">Rest-hour targets are stored for policy configuration. Exact hour-based enforcement requires configured shift start/end times; current solver enforces night-to-day recovery and consecutive-work limits.</p>
             <button class="primary" type="submit">Save shift policy</button>
           </form>
           <div id="hrPolicyRows" class="leave-list"></div>
