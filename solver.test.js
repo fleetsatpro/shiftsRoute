@@ -190,7 +190,9 @@ test('T and FSA count as work, not day/night desk coverage', () => {
   assert.equal(result.assignments.field['2026-07-01'], 'FSA');
   assert.equal(result.totals.trainee.total, 1);
   assert.equal(result.totals.field.total, 1);
-  assert.equal(result.assignments.trainee['2026-07-02'], 'D');
+  const dayOneDeskCoverage = Object.values(result.assignments)
+    .filter(days => days['2026-07-01'] === 'D').length;
+  assert.equal(dayOneDeskCoverage, 1, 'T and FSA must not satisfy the desk minimum');
 });
 
 test('other-desk assignment blocks same-day cross-team relief', () => {
