@@ -896,8 +896,14 @@ export default {
                  AND s2.department_id = other_schedule.department_id
                ORDER BY s2.generated_at DESC LIMIT 1
              )
-             AND sa.shift_code NOT IN ('O','L','PL','ML','SL','X')`
-        ).bind(month, department_id).all();
+             AND sa.shift_code NOT IN ('O','L','PL','ML','SL','X')
+          UNION
+          SELECT r.manager_staff_id AS staff_id, r.duty_date AS date
+          FROM duty_ops_assignments r
+          WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month')
+            AND r.manager_staff_id IS NOT NULL
+            AND (r.assignment_type = 'floating' OR r.coverage_department_id <> ?)`
+        ).bind(month, department_id, month + '-01', month + '-01', department_id).all();
         for (const row of otherDeskAssignments) {
           if (!blockedDatesByStaff[row.staff_id]) blockedDatesByStaff[row.staff_id] = new Set();
           blockedDatesByStaff[row.staff_id].add(row.date);
@@ -1068,7 +1074,7 @@ export default {
           ? [department.day_code, department.night_code, 'O', 'L', 'PL', 'ML', 'SL', 'T']
           : [];
         const assignment = await env.DB.prepare(
-          `SELECT sa.id, st.position_title, q.can_day, q.can_night,
+          `SELECT sa.id, sa.shift_code AS current_shift_code, st.position_title, q.can_day, q.can_night,
                   q.allocation_mode, COALESCE(p.night_mode, 'allowed') AS night_mode
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
@@ -1101,15 +1107,11 @@ export default {
           }
         }
         if (assignment.allocation_mode === 'critical_shortage_only'
-          && (shift_code === department.day_code || shift_code === department.night_code)) {
-          const minimum = shift_code === department.day_code ? department.day_min : department.night_min;
-          const covered = await env.DB.prepare(
-            `SELECT COUNT(*) AS total FROM shift_assignments
-             WHERE schedule_id = ? AND date = ? AND shift_code = ? AND staff_id <> ?`
-          ).bind(scheduleId, date, shift_code, staff_id).first();
-          if ((covered?.total || 0) >= minimum) {
-            return json({ error: 'Relief-only cross-qualification may be used only to fill a real minimum-coverage deficit' }, { status: 409 });
-          }
+          && (shift_code === department.day_code || shift_code === department.night_code)
+          && assignment.current_shift_code !== shift_code) {
+          return json({
+            error: 'Cross-team relief is solver-controlled and can only be scheduled after home-team capacity is exhausted. Regenerate the roster to calculate a genuine shortage.',
+          }, { status: 409 });
         }
         if (!['O', 'L', 'PL', 'ML', 'SL'].includes(shift_code)) {
           const conflict = await env.DB.prepare(
