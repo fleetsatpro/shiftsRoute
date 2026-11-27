@@ -516,7 +516,7 @@ export default {
         if (typeof body.staff_id !== 'string' || typeof body.department_id !== 'string'
           || !['0','1',0,1,false,true].includes(body.can_day)
           || !['0','1',0,1,false,true].includes(body.can_night)
-          || !/^\\d{4}-\\d{2}-\\d{2}$/.test(body.effective_from || '')) {
+          || !isValidCalendarDate(body.effective_from)) {
           return json({ error: 'Invalid qualification details' }, { status: 400 });
         }
         const staff = await env.DB.prepare('SELECT id, active, role, department_id FROM staff WHERE id = ?').bind(body.staff_id).first();
@@ -1010,7 +1010,7 @@ export default {
         const denied = requireAnyPermission('coverage.allocate');
         if (denied) return denied;
         const body = await request.json();
-        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(body.duty_date || '') || !isValidCalendarDate(body.duty_date)
+        if (!isValidCalendarDate(body.duty_date)) {
           || typeof body.manager_staff_id !== 'string'
           || !['floating','team_cover'].includes(body.assignment_type || 'floating')) {
           return json({ error: 'Invalid duty assignment' }, { status: 400 });
@@ -1045,7 +1045,7 @@ export default {
         if (typeof body.name !== 'string' || body.name.trim().length < 2 || body.name.length > 120) return json({ error: 'Valid employee name is required' }, { status: 400 });
         const homeDepartment = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
         if (!homeDepartment) return json({ error: 'A valid operational home department is required' }, { status: 400 });
-        const id = (body.id || body.name.toLowerCase().trim().replace(/\\s+/g,'-').replace(/[^a-z0-9-]/g,'')).slice(0,80);
+        const id = (body.id || body.name.toLowerCase().trim().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'')).slice(0,80);
         if (!/^[a-z0-9_-]{1,80}$/.test(id)) return json({ error: 'Invalid staff identifier' }, { status: 400 });
         const statements = [
           env.DB.prepare("INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, 'staff', 0)").bind(id, body.name.trim(), body.department_id),
