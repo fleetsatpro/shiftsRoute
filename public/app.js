@@ -266,7 +266,7 @@ async function loadScheduleById(id) {
 }
 
 async function loadStaffTable() {
-  const rows = await api(`/staff?department=${state.department}`);
+  const rows = await api('/staff?all=1');
   const tbody = el('staffTableBody');
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-3);">No staff found.</td></tr>';
