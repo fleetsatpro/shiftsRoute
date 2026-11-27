@@ -272,6 +272,51 @@ export default {
         return json({ ok: true }, { status: 201 });
       }
 
+      if (pathname === '/api/workforce/shift-exceptions' && request.method === 'GET') {
+        const denied = requireAnyPermission('exceptions.review');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          'SELECT e.*, s.name AS staff_name, r.name AS requester_name, v.name AS reviewer_name FROM workforce_shift_exceptions e JOIN staff s ON s.id=e.staff_id JOIN staff r ON r.id=e.requested_by LEFT JOIN staff v ON v.id=e.reviewed_by WHERE e.date LIKE ? ORDER BY e.date, e.created_at'
+        ).bind(month + '-%').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/shift-exceptions' && request.method === 'POST') {
+        const denied = requireAnyPermission('exceptions.request');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)
+          || typeof body.reason !== 'string' || body.reason.trim().length < 12 || body.reason.length > 1000
+          || !['N','NC'].includes(body.shift_code)) return json({ error: 'A valid employee, date, night shift code and detailed emergency reason are required' }, { status: 400 });
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const policy = await env.DB.prepare('SELECT night_mode FROM staff_shift_policies WHERE staff_id = ?').bind(body.staff_id).first();
+        if (!target?.active || policy?.night_mode !== 'exception_only') return json({ error: 'This employee is not configured for emergency-only night work' }, { status: 409 });
+        const id = crypto.randomUUID();
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO workforce_shift_exceptions (id, staff_id, date, shift_code, reason, status, requested_by) VALUES (?, ?, ?, ?, ?, 'pending', ?)").bind(id, body.staff_id, body.date, body.shift_code, body.reason.trim(), me.id),
+          env.DB.prepare("INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, 'shift_exception.requested', 'shift_exception', ?, ?)").bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, date: body.date, shift_code: body.shift_code }))
+        ]);
+        return json({ id, status: 'pending' }, { status: 201 });
+      }
+
+      const exceptionMatch = pathname.match(/^\\/api\\/workforce\\/shift-exceptions\\/([^/]+)$/);
+      if (exceptionMatch && request.method === 'PATCH') {
+        const denied = requireAnyPermission('exceptions.approve');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!['approved','rejected'].includes(body.status)) return json({ error: 'status must be approved or rejected' }, { status: 400 });
+        const exception = await env.DB.prepare('SELECT * FROM workforce_shift_exceptions WHERE id = ?').bind(exceptionMatch[1]).first();
+        if (!exception) return json({ error: 'Exception not found' }, { status: 404 });
+        if (exception.status !== 'pending') return json({ error: 'Only pending exceptions can be reviewed' }, { status: 409 });
+        await env.DB.batch([
+          env.DB.prepare('UPDATE workforce_shift_exceptions SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = \'pending\'').bind(body.status, me.id, new Date().toISOString(), exception.id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'shift_exception.' + body.status, 'shift_exception', exception.id, JSON.stringify({ staff_id: exception.staff_id, date: exception.date, shift_code: exception.shift_code }))
+        ]);
+        return json({ ok: true, status: body.status });
+      }
+
       if (pathname === '/api/workforce/duty-rota' && request.method === 'GET') {
         const denied = requireAnyPermission('coverage.read');
         if (denied) return denied;
