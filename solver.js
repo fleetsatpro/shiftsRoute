@@ -125,7 +125,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
       const min = isNight ? department.night_min : department.day_min;
 
       const candidates = staff
-        .filter(s => (isNight ? s.can_night !== 0 : s.can_day !== 0) && canAssign(s.id, day, shiftCode))
+        .filter(s => (isNight ? (s.can_night !== 0 || s.night_exception_dates?.includes(dateStr(month, day))) : s.can_day !== 0) && canAssign(s.id, day, shiftCode))
         .sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day));
 
       if (candidates.length < min) {
@@ -233,7 +233,7 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
     if ((busyCode !== dayCode && busyCode !== nightCode) || freeCode !== OFF) continue;
     const freePerson = staff.find(person => person.id === free);
     if (busyCode === dayCode && freePerson?.can_day === 0) continue;
-    if (busyCode === nightCode && freePerson?.can_night === 0) continue;
+    if (busyCode === nightCode && freePerson?.can_night === 0 && !freePerson?.night_exception_dates?.includes(dateStr(month, day))) continue;
 
     // Attempt swap
     state[busy][day] = OFF;
