@@ -94,7 +94,7 @@ test('admin can sign in, navigate to staff management, and filter the directory 
     await expect(page.locator('aside')).toBeHidden();
     await expect(page.locator('.mobile-nav')).toBeVisible();
     await expect(page.locator('.mobile-nav')).toHaveCSS('display', 'flex');
-    const tableScroller = page.locator('#tab-staff .panel > div');
+    const tableScroller = page.locator('#tab-staff .panel > div[style*="overflow-x:auto"]');
     await expect.poll(() => tableScroller.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-directory.png'), fullPage: true });
