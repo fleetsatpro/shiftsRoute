@@ -486,6 +486,37 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       const date = '2026-12-' + String(day).padStart(2,'0');
       assert.equal(cateAssignments.get(date), ['D','D','O','O'][(day-1)%4], 'Cate rotation day ' + date);
     }
+    // Cross-desk relief eligibility for new SCE hires is granted only
+    // after HR confirms their effective-dated home-team qualification.
+    const newHire = await fetch(baseUrl + '/api/hr/staff', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'New SCE Controller', department_id: 'SCE' }),
+    });
+    assert.equal(newHire.status, 201, await newHire.clone().text());
+    const newHireData = await newHire.json();
+    const prematureCrossQualification = await fetch(baseUrl + '/api/workforce/qualifications', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staff_id: newHireData.id, department_id: 'ISOC',
+        can_day: 1, can_night: 0, effective_from: '2026-12-01',
+        approval_note: 'Attempted relief qualification before home desk verification',
+      }),
+    });
+    assert.equal(prematureCrossQualification.status, 409);
+    const verifiedHomeQualification = await fetch(baseUrl + '/api/workforce/qualifications', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staff_id: newHireData.id, department_id: 'SCE',
+        can_day: 1, can_night: 0, effective_from: '2026-12-01',
+        approval_note: 'Verified SCE/SCM induction and day-shift competency',
+      }),
+    });
+    assert.equal(verifiedHomeQualification.status, 201, await verifiedHomeQualification.clone().text());
+    const newHireQualifications = await fetch(baseUrl + '/api/workforce/qualifications', { headers: { cookie: mercyCookie } });
+    const qualificationRows = await newHireQualifications.json();
+    assert.ok(qualificationRows.some(row => row.staff_id === newHireData.id && row.department_id === 'SCE' && row.relief_only === 0));
+    assert.ok(qualificationRows.some(row => row.staff_id === newHireData.id && row.department_id === 'ISOC' && row.relief_only === 1));
+
   } finally {
     if (worker) {
       // Wrangler's npx shim launches workerd/esbuild descendants. Kill the
