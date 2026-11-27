@@ -152,7 +152,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
   }
 
   // Local-search improvement pass
-  improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode });
+  improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState });
 
   const assignments = {};
   for (const s of staff) {
@@ -171,7 +171,7 @@ function variance(values) {
   return values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
 }
 
-function improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode }) {
+function improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState }) {
   const ITERATIONS = 600;
   const ids = staff.map(s => s.id);
 
@@ -181,10 +181,14 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
     for (let d = lo; d <= hi; d++) {
       const code = state[staffId][d];
       if (code === LEAVE) continue;
-      if (code === dayCode && state[staffId][d - 1] === nightCode) return false;
+      if (code === dayCode && d === 1 && priorFinalState?.[staffId]?.lastShift === 'night') return false;
+      if (code === dayCode && d > 1 && state[staffId][d - 1] === nightCode) return false;
       if (code === dayCode || code === nightCode) {
         let run = 0;
         for (let dd = d; dd >= 1 && (state[staffId][dd] === dayCode || state[staffId][dd] === nightCode); dd--) run++;
+        if (d === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
+          run += priorFinalState[staffId].consecutiveWork ?? 0;
+        }
         if (run > 5) return false;
       }
     }

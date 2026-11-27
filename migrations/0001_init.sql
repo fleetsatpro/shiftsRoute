@@ -75,6 +75,3 @@ INSERT INTO staff (id, name, department_id) VALUES
   ('griffin', 'Griffin', 'SCE'),
   ('chebet', 'Chebet', 'SCE'),
   ('moreen', 'Moreen', 'SCE');
-
--- Patrick added to SCE
-INSERT INTO staff (id,name,department_id,active,role,pin_set) VALUES ('patrick','Patrick','SCE',1,'staff',0);

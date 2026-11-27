@@ -22,8 +22,11 @@
 //   GET    /api/health                    → { ok: true, ts }           [none]
 
 import { generateSchedule, daysInMonth, dateStr } from './solver.js';
+import { buildCsv, isValidCalendarDate, isValidMonth } from './helpers.js';
 import {
   sha256Hex,
+  hashPin,
+  safeEqual,
   isValidPin,
   getCurrentStaff,
   createSession,
@@ -81,16 +84,42 @@ export default {
 
       if (pathname === '/api/auth/set-pin' && request.method === 'POST') {
         const body = await request.json();
-        const { staff_id, pin } = body;
-        if (!isValidPin(pin)) return json({ error: 'PIN must be 4–6 digits' }, { status: 400 });
+        const { staff_id, pin, enrollment_code } = body;
+        if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
+        if (typeof enrollment_code !== 'string' || enrollment_code.length < 16 || enrollment_code.length > 256) {
+          return json({ error: 'A valid one-time enrollment code is required' }, { status: 403 });
+        }
         const person = await env.DB.prepare(
-          'SELECT id, pin_set FROM staff WHERE id = ? AND active = 1'
+          'SELECT id, pin_set, role, enrollment_hash FROM staff WHERE id = ? AND active = 1'
         ).bind(staff_id).first();
-        if (!person) return json({ error: 'Unknown staff member' }, { status: 404 });
+        if (!person) return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         if (person.pin_set) return json({ error: 'PIN already set — use login instead' }, { status: 409 });
-        const hash = await sha256Hex(pin);
-        await env.DB.prepare('UPDATE staff SET pin_hash = ?, pin_set = 1 WHERE id = ?')
-          .bind(hash, staff_id).run();
+        const bootstrapClaim = await env.DB.prepare(
+          "SELECT value FROM app_settings WHERE key = 'initial_admin_enrolled'"
+        ).first();
+        const bootstrapAllowed = !bootstrapClaim
+          && person.role === 'admin'
+          && typeof env.INITIAL_ADMIN_ENROLLMENT_SECRET === 'string'
+          && safeEqual(enrollment_code, env.INITIAL_ADMIN_ENROLLMENT_SECRET);
+        const issuedCodeAllowed = !!person.enrollment_hash
+          && safeEqual(await sha256Hex(enrollment_code), person.enrollment_hash);
+        if (!bootstrapAllowed && !issuedCodeAllowed) {
+          return json({ error: 'Enrollment could not be verified' }, { status: 403 });
+        }
+        const credential = await hashPin(pin);
+        const statements = [
+          env.DB.prepare(
+            'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
+          ).bind(credential.hash, credential.salt, staff_id),
+        ];
+        if (bootstrapAllowed) {
+          statements.push(env.DB.prepare(
+            "INSERT INTO app_settings (key, value) VALUES ('initial_admin_enrolled', ?)"
+          ).bind(new Date().toISOString()));
+        }
+        await env.DB.batch(statements);
+        const enrolled = await env.DB.prepare('SELECT pin_set FROM staff WHERE id = ?').bind(staff_id).first();
+        if (!enrolled?.pin_set) return json({ error: 'Account enrollment could not be completed' }, { status: 409 });
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 201, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
@@ -98,14 +127,37 @@ export default {
       if (pathname === '/api/auth/login' && request.method === 'POST') {
         const body = await request.json();
         const { staff_id, pin } = body;
-        if (!isValidPin(pin)) return json({ error: 'PIN must be 4–6 digits' }, { status: 400 });
+        if (typeof staff_id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(staff_id)) {
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
+        if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
+        const throttle = await checkLoginThrottle(request, env.DB, staff_id);
+        if (throttle.blocked) return json({ error: 'Too many sign-in attempts. Try again later.' }, { status: 429 });
         const person = await env.DB.prepare(
-          'SELECT id, pin_hash, pin_set FROM staff WHERE id = ? AND active = 1'
+          'SELECT id, pin_hash, pin_salt, pin_set FROM staff WHERE id = ? AND active = 1'
         ).bind(staff_id).first();
-        if (!person) return json({ error: 'Unknown staff member' }, { status: 404 });
-        if (!person.pin_set) return json({ error: 'No PIN set yet — select "Set PIN & sign in"' }, { status: 409 });
-        const hash = await sha256Hex(pin);
-        if (hash !== person.pin_hash) return json({ error: 'Incorrect PIN' }, { status: 401 });
+        if (!person || !person.pin_set) {
+          await recordLoginFailure(env.DB, throttle.key);
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
+        let valid = false;
+        if (person.pin_salt) {
+          const candidate = await hashPin(pin, person.pin_salt);
+          valid = safeEqual(candidate.hash, person.pin_hash);
+        } else {
+          // One-time compatibility path: upgrade legacy unsalted SHA-256 PINs after successful login.
+          valid = safeEqual(await sha256Hex(pin), person.pin_hash || '');
+          if (valid) {
+            const upgraded = await hashPin(pin);
+            await env.DB.prepare('UPDATE staff SET pin_hash = ?, pin_salt = ? WHERE id = ? AND pin_salt IS NULL')
+              .bind(upgraded.hash, upgraded.salt, staff_id).run();
+          }
+        }
+        if (!valid) {
+          await recordLoginFailure(env.DB, throttle.key);
+          return json({ error: 'Invalid staff ID or PIN' }, { status: 401 });
+        }
+        await clearLoginFailures(env.DB, throttle.key);
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 200, headers: { 'Set-Cookie': setSessionCookie(token) } });
       }
@@ -139,12 +191,16 @@ export default {
         if (denied) return denied;
         const body = await request.json();
         const { staff_id } = body;
-        await env.DB.prepare(
-          'UPDATE staff SET pin_hash = NULL, pin_set = 0 WHERE id = ?'
-        ).bind(staff_id).run();
-        // Invalidate all existing sessions for that staff member
-        await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staff_id).run();
-        return json({ ok: true, staff_id });
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(staff_id).first();
+        if (!target?.active) return json({ error: 'Active staff account not found' }, { status: 404 });
+        const enrollmentCode = [...crypto.getRandomValues(new Uint8Array(24))]
+          .map((b) => b.toString(16).padStart(2, '0')).join('');
+        await env.DB.batch([
+          env.DB.prepare('UPDATE staff SET pin_hash = NULL, pin_salt = NULL, pin_set = 0, enrollment_hash = ? WHERE id = ?')
+            .bind(await sha256Hex(enrollmentCode), staff_id),
+          env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staff_id),
+        ]);
+        return json({ ok: true, staff_id, enrollment_code: enrollmentCode });
       }
 
       // ── Departments ───────────────────────────────────────────────────
@@ -155,7 +211,8 @@ export default {
 
       // ── Staff ─────────────────────────────────────────────────────────
       if (pathname === '/api/staff' && request.method === 'GET') {
-        const dept = url.searchParams.get('department');
+        const requestedDept = url.searchParams.get('department');
+        const dept = isAdmin ? requestedDept : me.department_id;
         const stmt = dept
           ? env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE department_id = ? AND active = 1 ORDER BY name').bind(dept)
           : env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name');
@@ -184,7 +241,9 @@ export default {
           const s = await env.DB.prepare(
             'SELECT id, name, department_id, role, pin_set FROM staff WHERE id = ? AND active = 1'
           ).bind(staffId).first();
-          if (!s) return json({ error: 'Not found' }, { status: 404 });
+          if (!s || (!isAdmin && s.department_id !== me.department_id)) {
+            return json({ error: 'Not found' }, { status: 404 });
+          }
           return json(s);
         }
         if (request.method === 'PATCH') {
@@ -230,7 +289,14 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
         const body = await request.json();
-        if (!body.staff_id || !body.date) return json({ error: 'staff_id and date required' }, { status: 400 });
+        if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)) {
+          return json({ error: 'A valid staff_id and YYYY-MM-DD date are required' }, { status: 400 });
+        }
+        if (body.status !== undefined && !['approved', 'pending'].includes(body.status)) {
+          return json({ error: 'status must be approved or pending' }, { status: 400 });
+        }
+        const target = await env.DB.prepare('SELECT id FROM staff WHERE id = ? AND active = 1').bind(body.staff_id).first();
+        if (!target) return json({ error: 'Active staff account not found' }, { status: 404 });
         const id = uuid();
         await env.DB.prepare(
           'INSERT INTO leave_requests (id, staff_id, date, status) VALUES (?, ?, ?, ?) ' +
@@ -272,8 +338,31 @@ export default {
         const body = await request.json();
         const { to_staff_id, date, shift_code } = body;
         // from_staff_id is always the requester
-        if (!to_staff_id || !date || !shift_code) {
-          return json({ error: 'to_staff_id, date, and shift_code required' }, { status: 400 });
+        if (typeof to_staff_id !== 'string' || to_staff_id === me.id || !isValidCalendarDate(date)) {
+          return json({ error: 'A different recipient and valid YYYY-MM-DD date are required' }, { status: 400 });
+        }
+        const department = await env.DB.prepare('SELECT day_code, night_code FROM departments WHERE id = ?')
+          .bind(me.department_id).first();
+        if (!department || ![department.day_code, department.night_code].includes(shift_code)) {
+          return json({ error: 'The requested shift code is not valid for your department' }, { status: 400 });
+        }
+        const recipient = await env.DB.prepare(
+          'SELECT id FROM staff WHERE id = ? AND active = 1 AND department_id = ?'
+        ).bind(to_staff_id, me.department_id).first();
+        if (!recipient) return json({ error: 'Recipient must be active in your department' }, { status: 404 });
+        const draft = await env.DB.prepare(
+          "SELECT id FROM schedules WHERE month = ? AND department_id = ? AND status = 'draft' ORDER BY generated_at DESC LIMIT 1"
+        ).bind(date.slice(0, 7), me.department_id).first();
+        if (!draft) return json({ error: 'No editable draft schedule exists for this date' }, { status: 409 });
+        const [fromAssignment, toAssignment] = await Promise.all([
+          env.DB.prepare('SELECT shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?')
+            .bind(draft.id, me.id, date).first(),
+          env.DB.prepare('SELECT shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?')
+            .bind(draft.id, to_staff_id, date).first(),
+        ]);
+        if (!fromAssignment || !toAssignment || fromAssignment.shift_code !== shift_code
+          || ![department.day_code, department.night_code, 'O'].includes(toAssignment.shift_code)) {
+          return json({ error: 'The selected staff assignments are not eligible for this swap' }, { status: 409 });
         }
         const id = uuid();
         await env.DB.prepare(
@@ -293,9 +382,65 @@ export default {
           if (!['approve', 'reject'].includes(action)) {
             return json({ error: 'action must be approve or reject' }, { status: 400 });
           }
-          await env.DB.prepare('UPDATE swap_requests SET status = ? WHERE id = ?')
-            .bind(action === 'approve' ? 'approved' : 'rejected', swapId).run();
-          return json({ updated: true });
+          const swap = await env.DB.prepare('SELECT * FROM swap_requests WHERE id = ?').bind(swapId).first();
+          if (!swap) return json({ error: 'Swap request not found' }, { status: 404 });
+          if (swap.status !== 'pending') return json({ error: 'Only pending swap requests can be reviewed' }, { status: 409 });
+          if (action === 'approve' && !isValidCalendarDate(swap.date)) {
+            return json({ error: 'Swap request contains an invalid date and cannot be approved' }, { status: 409 });
+          }
+          if (action === 'reject') {
+            const result = await env.DB.prepare("UPDATE swap_requests SET status = 'rejected' WHERE id = ? AND status = 'pending'").bind(swapId).run();
+            if (!result.meta?.changes) return json({ error: 'Request state changed; reload and retry' }, { status: 409 });
+            return json({ updated: true, status: 'rejected' });
+          }
+
+          const [fromStaff, toStaff] = await Promise.all([
+            env.DB.prepare('SELECT id, department_id, active FROM staff WHERE id = ?').bind(swap.from_staff_id).first(),
+            env.DB.prepare('SELECT id, department_id, active FROM staff WHERE id = ?').bind(swap.to_staff_id).first(),
+          ]);
+          if (!fromStaff?.active || !toStaff?.active || fromStaff.department_id !== toStaff.department_id) {
+            return json({ error: 'Both staff members must be active in the same department' }, { status: 409 });
+          }
+          const month = swap.date.slice(0, 7);
+          const schedule = await env.DB.prepare(
+            "SELECT id FROM schedules WHERE month = ? AND department_id = ? AND status = 'draft' ORDER BY generated_at DESC LIMIT 1"
+          ).bind(month, fromStaff.department_id).first();
+          if (!schedule) return json({ error: 'No editable draft schedule exists for this date; generate a draft before approving the swap' }, { status: 409 });
+          const [fromAssignment, toAssignment] = await Promise.all([
+            env.DB.prepare('SELECT id, shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?').bind(schedule.id, swap.from_staff_id, swap.date).first(),
+            env.DB.prepare('SELECT id, shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?').bind(schedule.id, swap.to_staff_id, swap.date).first(),
+          ]);
+          if (!fromAssignment || !toAssignment || fromAssignment.shift_code !== swap.shift_code) {
+            return json({ error: 'The requested assignments have changed; refresh the roster and submit a new request' }, { status: 409 });
+          }
+          // Re-check draft state, request state and the exact pre-swap values in
+          // the write transaction. A schedule can be published after the reads
+          // above; no approval may mutate a published schedule.
+          await env.DB.batch([
+            env.DB.prepare(
+              `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
+               WHERE id = ? AND schedule_id = ? AND shift_code = ?
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(toAssignment.shift_code, fromAssignment.id, schedule.id, fromAssignment.shift_code, schedule.id, swapId),
+            env.DB.prepare(
+              `UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1
+               WHERE id = ? AND schedule_id = ? AND shift_code = ?
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM swap_requests WHERE id = ? AND status = 'pending')`
+            ).bind(fromAssignment.shift_code, toAssignment.id, schedule.id, toAssignment.shift_code, schedule.id, swapId),
+            env.DB.prepare(
+              `UPDATE swap_requests SET status = 'approved'
+               WHERE id = ? AND status = 'pending'
+                 AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')
+                 AND EXISTS (SELECT 1 FROM shift_assignments WHERE id = ? AND schedule_id = ? AND shift_code = ?)
+                 AND EXISTS (SELECT 1 FROM shift_assignments WHERE id = ? AND schedule_id = ? AND shift_code = ?)`
+            ).bind(swapId, schedule.id, fromAssignment.id, schedule.id, toAssignment.shift_code,
+              toAssignment.id, schedule.id, fromAssignment.shift_code),
+          ]);
+          const confirmed = await env.DB.prepare("SELECT status FROM swap_requests WHERE id = ?").bind(swapId).first();
+          if (confirmed?.status !== 'approved') return json({ error: 'Swap could not be committed; reload and retry' }, { status: 409 });
+          return json({ updated: true, status: 'approved', schedule_id: schedule.id });
         }
         if (request.method === 'DELETE') {
           const swap = await env.DB.prepare('SELECT * FROM swap_requests WHERE id = ?').bind(swapId).first();
@@ -303,7 +448,13 @@ export default {
           if (swap.from_staff_id !== me.id && !isAdmin) {
             return json({ error: 'Cannot cancel another staff member\'s request' }, { status: 403 });
           }
-          await env.DB.prepare('DELETE FROM swap_requests WHERE id = ?').bind(swapId).run();
+          // Completed/rejected requests are audit records and cannot be removed.
+          const removed = await env.DB.prepare(
+            "DELETE FROM swap_requests WHERE id = ? AND status = 'pending'"
+          ).bind(swapId).run();
+          if (!removed.meta?.changes) {
+            return json({ error: 'Only pending swap requests can be cancelled' }, { status: 409 });
+          }
           return json({ deleted: true });
         }
       }
@@ -315,8 +466,8 @@ export default {
 
         const body = await request.json();
         const { month, department_id } = body;
-        if (!month || !department_id) {
-          return json({ error: 'month and department_id are required' }, { status: 400 });
+        if (!isValidMonth(month) || typeof department_id !== 'string' || !department_id) {
+          return json({ error: 'A valid YYYY-MM month and department_id are required' }, { status: 400 });
         }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
@@ -380,7 +531,12 @@ export default {
         let query = 'SELECT * FROM schedules WHERE 1=1';
         const binds = [];
         if (month) { query += ' AND month = ?'; binds.push(month); }
-        if (dept)  { query += ' AND department_id = ?'; binds.push(dept); }
+        if (isAdmin) {
+          if (dept) { query += ' AND department_id = ?'; binds.push(dept); }
+        } else {
+          query += ' AND department_id = ?';
+          binds.push(me.department_id);
+        }
         query += ' ORDER BY generated_at DESC';
         const { results } = await env.DB.prepare(query).bind(...binds).all();
         return json(results);
@@ -391,7 +547,9 @@ export default {
       if (mineMatch && request.method === 'GET') {
         const id = mineMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
-        if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!schedule || schedule.department_id !== me.department_id) {
+          return json({ error: 'Not found' }, { status: 404 });
+        }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
           .bind(me.department_id).first();
@@ -437,6 +595,9 @@ export default {
         const id = scheduleMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
         if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!isAdmin && schedule.department_id !== me.department_id) {
+          return json({ error: 'Schedule not found' }, { status: 404 });
+        }
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override
@@ -456,27 +617,49 @@ export default {
         if (denied) return denied;
 
         const scheduleId = patchMatch[1];
+        const targetSchedule = await env.DB.prepare(
+          'SELECT id, status, month, department_id FROM schedules WHERE id = ?'
+        ).bind(scheduleId).first();
+        if (!targetSchedule) return json({ error: 'Schedule not found' }, { status: 404 });
+        if (targetSchedule.status !== 'draft') {
+          return json({ error: 'Only draft schedules are editable. Create a new draft version to make changes.' }, { status: 409 });
+        }
         const body = await request.json();
         const { staff_id, date, shift_code } = body;
 
-        if (!staff_id || !date || !shift_code) {
-          return json({ error: 'staff_id, date, and shift_code required' }, { status: 400 });
+        if (typeof staff_id !== 'string' || !isValidCalendarDate(date) || !shift_code
+          || date.slice(0, 7) !== targetSchedule.month) {
+          return json({ error: 'staff_id, a valid date in the schedule month, and shift_code are required' }, { status: 400 });
         }
 
-        const validCodes = ['D', 'N', 'DC', 'NC', 'O', 'L'];
+        const department = await env.DB.prepare(
+          'SELECT day_code, night_code FROM departments WHERE id = ?'
+        ).bind(targetSchedule.department_id).first();
+        const validCodes = department
+          ? [department.day_code, department.night_code, 'O', 'L']
+          : [];
         if (!validCodes.includes(shift_code)) {
-          return json({ error: `invalid shift_code — must be one of ${validCodes.join(', ')}` }, { status: 400 });
+          return json({ error: 'Shift code is not valid for this department' }, { status: 400 });
         }
 
-        // Verify the assignment row exists
+        // Confirm the staff member belongs to the schedule's department.
         const existing = await env.DB.prepare(
-          'SELECT id FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?'
-        ).bind(scheduleId, staff_id, date).first();
+          `SELECT sa.id FROM shift_assignments sa
+           JOIN staff st ON st.id = sa.staff_id
+           WHERE sa.schedule_id = ? AND sa.staff_id = ? AND sa.date = ?
+             AND st.department_id = ?`
+        ).bind(scheduleId, staff_id, date, targetSchedule.department_id).first();
         if (!existing) return json({ error: 'Assignment not found' }, { status: 404 });
 
-        await env.DB.prepare(
-          'UPDATE shift_assignments SET shift_code = ?, is_manual_override = 1 WHERE schedule_id = ? AND staff_id = ? AND date = ?'
-        ).bind(shift_code, scheduleId, staff_id, date).run();
+        const update = await env.DB.prepare(
+          `UPDATE shift_assignments
+           SET shift_code = ?, is_manual_override = 1
+           WHERE schedule_id = ? AND staff_id = ? AND date = ?
+             AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')`
+        ).bind(shift_code, scheduleId, staff_id, date, scheduleId).run();
+        if (!update.meta?.changes) {
+          return json({ error: 'Schedule is no longer editable; reload before making changes' }, { status: 409 });
+        }
 
         return json({ updated: true });
       }
@@ -487,7 +670,11 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
         const id = publishMatch[1];
-        await env.DB.prepare("UPDATE schedules SET status = 'published' WHERE id = ?").bind(id).run();
+        const schedule = await env.DB.prepare('SELECT id, status FROM schedules WHERE id = ?').bind(id).first();
+        if (!schedule) return json({ error: 'Schedule not found' }, { status: 404 });
+        if (schedule.status === 'published') return json({ error: 'Schedule is already published' }, { status: 409 });
+        const result = await env.DB.prepare("UPDATE schedules SET status = 'published' WHERE id = ? AND status = 'draft'").bind(id).run();
+        if (!result.meta?.changes) return json({ error: 'Schedule state changed; reload and retry' }, { status: 409 });
         return json({ published: true });
       }
 
@@ -497,6 +684,9 @@ export default {
         const id = exportMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
         if (!schedule) return json({ error: 'Not found' }, { status: 404 });
+        if (!isAdmin && schedule.department_id !== me.department_id) {
+          return json({ error: 'Schedule not found' }, { status: 404 });
+        }
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code
@@ -521,12 +711,40 @@ export default {
       console.error(err);
       // In production, don't leak stack traces
       return json({
-        error: err.message || 'Internal server error',
+        error: env.ENVIRONMENT === 'development' ? (err.message || 'Internal server error') : 'Internal server error',
         ...(env.ENVIRONMENT === 'development' ? { stack: err.stack } : {}),
       }, { status: 500 });
     }
   },
 };
+
+
+async function checkLoginThrottle(request, db, staffId) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const key = await sha256Hex(`${staffId.toLowerCase()}:${ip}`);
+  const row = await db.prepare('SELECT blocked_until FROM auth_attempts WHERE attempt_key = ?').bind(key).first();
+  return { key, blocked: Number(row?.blocked_until || 0) > Date.now() };
+}
+
+async function recordLoginFailure(db, key) {
+  const now = Date.now();
+  const windowStart = now - 15 * 60 * 1000;
+  const blockedUntil = now + 15 * 60 * 1000;
+  await db.prepare(`
+    INSERT INTO auth_attempts (attempt_key, window_started_at, attempts, blocked_until)
+    VALUES (?, ?, 1, NULL)
+    ON CONFLICT(attempt_key) DO UPDATE SET
+      attempts = CASE WHEN auth_attempts.window_started_at <= ? THEN 1 ELSE auth_attempts.attempts + 1 END,
+      window_started_at = CASE WHEN auth_attempts.window_started_at <= ? THEN ? ELSE auth_attempts.window_started_at END,
+      blocked_until = CASE
+        WHEN (CASE WHEN auth_attempts.window_started_at <= ? THEN 1 ELSE auth_attempts.attempts + 1 END) >= 5
+        THEN ? ELSE auth_attempts.blocked_until END
+  `).bind(key, now, windowStart, windowStart, now, windowStart, blockedUntil).run();
+}
+
+async function clearLoginFailures(db, key) {
+  await db.prepare('DELETE FROM auth_attempts WHERE attempt_key = ?').bind(key).run();
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -565,23 +783,3 @@ async function getPriorFinalState(db, month, departmentId, staffRows, dept) {
   return priorFinalState;
 }
 
-function buildCsv(assignments, month) {
-  const dayCount = daysInMonth(month);
-  const byStaff = {};
-  for (const row of assignments) {
-    if (!byStaff[row.staff_id]) {
-      byStaff[row.staff_id] = { name: row.staff_name, department_id: row.department_id, days: {} };
-    }
-    byStaff[row.staff_id].days[row.date] = row.shift_code;
-  }
-
-  const header = ['Department', 'Staff', ...Array.from({ length: dayCount }, (_, i) => dateStr(month, i + 1))];
-  const lines = [header.join(',')];
-  for (const staffId of Object.keys(byStaff)) {
-    const { name, department_id, days } = byStaff[staffId];
-    const row = [department_id, name];
-    for (let d = 1; d <= dayCount; d++) row.push(days[dateStr(month, d)] || '');
-    lines.push(row.join(','));
-  }
-  return lines.join('\n');
-}
