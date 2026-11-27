@@ -179,7 +179,7 @@ export default {
 
       if (!me) return json({ error: 'Sign in required' }, { status: 401 });
 
-      const isAdmin = me.role === 'admin';
+      const isAdmin = me.role === 'admin' || me.role === 'duty_ops_manager';
       function requireAdmin() {
         if (!isAdmin) return json({ error: 'Admin access required' }, { status: 403 });
         return null;
@@ -230,7 +230,7 @@ export default {
         const id = body.id || body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
         await env.DB.prepare(
           'INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)'
-        ).bind(id, body.name, body.department_id, body.role === 'admin' ? 'admin' : 'staff').run();
+        ).bind(id, body.name, body.department_id, ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff').run();
         return json({ id, name: body.name, department_id: body.department_id }, { status: 201 });
       }
 
@@ -253,7 +253,7 @@ export default {
           const updates = [];
           const binds = [];
           if (body.name) { updates.push('name = ?'); binds.push(body.name); }
-          if (body.role && ['admin', 'staff'].includes(body.role)) {
+          if (body.role && ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role)) {
             updates.push('role = ?'); binds.push(body.role);
           }
           if (updates.length === 0) return json({ error: 'Nothing to update' }, { status: 400 });
