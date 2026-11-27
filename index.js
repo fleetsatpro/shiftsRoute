@@ -237,7 +237,8 @@ export default {
           return { ok: false, status: 400, error: 'The selected shift code does not belong to the target desk' };
         }
         const person = await env.DB.prepare(
-          'SELECT id, name, department_id, active FROM staff WHERE id = ?'
+          'SELECT s.id, s.name, s.department_id, s.active, d.night_rest_rule AS home_night_rest_rule ' +
+          'FROM staff s LEFT JOIN departments d ON d.id=s.department_id WHERE s.id = ?'
         ).bind(staff_id).first();
         if (!person?.active) return { ok: false, status: 404, error: 'Active employee not found' };
         if (person.department_id === target_department_id) {
@@ -343,7 +344,8 @@ export default {
         if (beforeStreak + 1 + afterStreak > policyMax) {
           return { ok: false, status: 409, error: 'This deployment would exceed the employee’s maximum consecutive work-day limit across both desks' };
         }
-        if (targetDepartment.night_rest_rule === 1) {
+        const enforceNightRest = targetDepartment.night_rest_rule === 1 || person.home_night_rest_rule === 1;
+        if (enforceNightRest) {
           const previousCalendarDate = previousDay.toISOString().slice(0,10);
           const nextCalendarDate = nextDay.toISOString().slice(0,10);
           const yesterdayCodes = (neighbouringAssignments.results || [])
