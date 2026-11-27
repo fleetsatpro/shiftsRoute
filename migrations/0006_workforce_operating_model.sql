@@ -106,7 +106,7 @@ SELECT id, 'allowed', 5, 11, '2026-01-01' FROM staff WHERE active = 1;
 CREATE TABLE IF NOT EXISTS duty_ops_assignments (
   id TEXT PRIMARY KEY,
   duty_date TEXT NOT NULL UNIQUE,
-  manager_staff_id TEXT NOT NULL REFERENCES staff(id),
+  manager_staff_id TEXT REFERENCES staff(id),
   assignment_type TEXT NOT NULL DEFAULT 'floating'
     CHECK (assignment_type IN ('floating','team_cover')),
   coverage_department_id TEXT REFERENCES departments(id),
