@@ -552,10 +552,11 @@ async function cancelSwap(id) {
 // ── Workforce workspaces ──────────────────────────────────
 async function loadHRWorkspace() {
   const month = el('month')?.value || todayMonth();
-  const [staff, qualifications, leave] = await Promise.all([
+  const [staff, qualifications, leave, overview] = await Promise.all([
     api('/hr/staff'),
     api('/workforce/qualifications'),
     api('/leave?month=' + encodeURIComponent(month)),
+    api('/workforce/overview'),
   ]);
   state.hrStaff = staff;
   state.hrQualifications = qualifications;
@@ -567,7 +568,10 @@ async function loadHRWorkspace() {
     <tr><td>${escHtml(person.name)}</td><td>${escHtml(person.department_id)}</td>
     <td>${escHtml(person.role)}</td><td>${person.pin_set ? 'Enrolled' : 'Pending'}</td>
     <td>${person.active ? 'Active' : 'Inactive'}</td></tr>`).join('');
-  const operationalStaff = staff.filter(person => person.active && ['ISOC','SCE'].includes(person.department_id));
+  const operationalStaff = staff.filter(person => person.active && overview.departments.some(department => department.id === person.department_id));
+  const departmentOptions = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
+  el('hrQualDept').innerHTML = departmentOptions;
+  el('hrNewDepartment').innerHTML = departmentOptions;
   const select = el('hrQualStaff');
   select.innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
