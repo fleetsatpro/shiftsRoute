@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const externalBaseURL = process.env.E2E_BASE_URL;
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -12,7 +14,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: externalBaseURL || 'http://127.0.0.1:4173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -21,10 +23,12 @@ export default defineConfig({
     { name: 'chromium-desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
     { name: 'chromium-mobile', use: { ...devices['Pixel 7'], defaultBrowserType: 'chromium' } },
   ],
-  webServer: {
-    command: 'node tests/e2e/server.mjs',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 10_000,
-  },
+  ...(externalBaseURL ? {} : {
+    webServer: {
+      command: 'node tests/e2e/server.mjs',
+      url: 'http://127.0.0.1:4173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 10_000,
+    },
+  }),
 });
