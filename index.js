@@ -187,7 +187,8 @@ export default {
       const permissions = new Set(permissionRows.map(row => row.permission));
       const isAdmin = permissions.has('system.configure') && permissions.has('staff.manage');
       const isDutyOpsManager = me.role === 'duty_ops_manager';
-      const isHr = me.role === 'hr';
+      const isHr = permissions.has('staff.lifecycle');
+      const canManageLeave = permissions.has('leave.manage');
       function requireAdmin() {
         if (!isAdmin) return json({ error: 'Administrative permission required' }, { status: 403 });
         return null;
@@ -523,7 +524,7 @@ export default {
         const staffId = url.searchParams.get('staff_id');
         const month   = url.searchParams.get('month');
         // Non-admins can see their own leave
-        const effectiveStaffId = isAdmin ? staffId : me.id;
+        const effectiveStaffId = canManageLeave ? staffId : me.id;
         let query = 'SELECT * FROM leave_requests WHERE 1=1';
         const binds = [];
         if (effectiveStaffId) { query += ' AND staff_id = ?'; binds.push(effectiveStaffId); }
@@ -533,7 +534,7 @@ export default {
       }
 
       if (pathname === '/api/leave' && request.method === 'POST') {
-        const denied = requireAdmin();
+        const denied = requireAnyPermission('leave.manage');
         if (denied) return denied;
         const body = await request.json();
         if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)) {
@@ -553,7 +554,7 @@ export default {
       }
 
       if (pathname.startsWith('/api/leave/') && request.method === 'DELETE') {
-        const denied = requireAdmin();
+        const denied = requireAnyPermission('leave.manage');
         if (denied) return denied;
         const id = pathname.split('/').pop();
         await env.DB.prepare('DELETE FROM leave_requests WHERE id = ?').bind(id).run();
