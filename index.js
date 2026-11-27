@@ -393,7 +393,9 @@ export default {
           const count = await env.DB.prepare(
             "SELECT COUNT(*) AS covered FROM shift_assignments WHERE schedule_id=? AND date=? " +
             "AND ((coverage_department_id=? AND coverage_shift_code=?) OR (coverage_department_id IS NULL AND shift_code=?)) " +
-            "AND shift_code NOT IN ('O','L','PL','ML','SL')"
+            "AND shift_code NOT IN ('O','L','PL','ML','SL') " +
+            "AND NOT EXISTS (SELECT 1 FROM leave_requests l WHERE l.staff_id=shift_assignments.staff_id " +
+            "AND l.date=shift_assignments.date AND l.status='approved')"
           ).bind(baseline.id, duty_date, target_department_id, shift_code, shift_code).first();
           const scheduled = Number(count?.covered || 0);
           const planned = await env.DB.prepare(

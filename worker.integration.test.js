@@ -324,11 +324,17 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(noShortage.status, 409, await noShortage.clone().text());
     assert.match((await noShortage.json()).error, /already meets its minimum/i);
 
-    // Simulate a genuine last-minute shortage in an isolated D1 fixture.
-    wrangler(['d1','execute',database,'--local','--command',
-      "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + initialIsoc.id +
-      "' AND date='" + reliefDate + "' AND shift_code='D';"
-    ], persistDir);
+    // Record a genuine last-minute absence through the HR leave workflow.
+    // The schedule still shows the pre-absence shift; shortage verification
+    // must subtract approved leave rather than mutating a locked roster row.
+    const absentIsocWorker = initialIsoc.assignments.find(row =>
+      row.date === reliefDate && row.shift_code === 'D' && row.staff_id !== 'griffin');
+    assert.ok(absentIsocWorker, 'fixture needs a primary ISOC day worker who can be marked absent');
+    const lastMinuteLeave = await fetch(baseUrl + '/api/leave', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ staff_id: absentIsocWorker.staff_id, date: reliefDate, status: 'approved', leave_type: 'SL' }),
+    });
+    assert.equal(lastMinuteLeave.status, 201, await lastMinuteLeave.clone().text());
     const reliefRequest = await requestRelief(hildaCookie, 'griffin', reliefDate, { target_department_id: 'ISOC', shift_code: 'D' });
     assert.equal(reliefRequest.status, 201, await reliefRequest.clone().text());
     const requested = await reliefRequest.json();
@@ -374,10 +380,14 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       .filter(row => row.department_id === 'ISOC' && row.shift_code === 'D' && row.date !== reliefDate)
       .map(row => row.date))][0];
     assert.ok(clintonDate, 'fixture needs a second ISOC day shift');
-    wrangler(['d1','execute',database,'--local','--command',
-      "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + isocWithGriffinRelief.id +
-      "' AND date='" + clintonDate + "' AND shift_code='D';"
-    ], persistDir);
+    const absentClintonDateWorker = isocWithGriffinRelief.assignments.find(row =>
+      row.date === clintonDate && row.shift_code === 'D' && row.staff_id !== 'clinton-juma');
+    assert.ok(absentClintonDateWorker, 'fixture needs an ISOC day worker for the Field Supervisor shortage scenario');
+    const clintonDateLeave = await fetch(baseUrl + '/api/leave', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ staff_id: absentClintonDateWorker.staff_id, date: clintonDate, status: 'approved', leave_type: 'SL' }),
+    });
+    assert.equal(clintonDateLeave.status, 201, await clintonDateLeave.clone().text());
     const clintonRequest = await requestRelief(hildaCookie, 'clinton-juma', clintonDate, {
       target_department_id: 'ISOC', shift_code: 'D', display_code: 'FSA',
     });
@@ -401,7 +411,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
       "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + isocWithFsa.id +
       "' AND staff_id='clinton-juma' AND date='" + clintonDate + "';"
-    ], persistDir), /Locked workforce assignments cannot be edited/i);
+    ], persistDir), /Locked workforce assignments cannot be edited|Cross-desk roster metadata requires a matching approved relief allocation/i);
     const clintonPersonal = await fetch(baseUrl + '/api/workforce/my-roster?month=2026-12', { headers: { cookie: clintonCookie } });
     assert.equal(clintonPersonal.status, 200);
     const clintonData = await clintonPersonal.json();

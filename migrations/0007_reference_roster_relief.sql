@@ -611,3 +611,120 @@ WHEN OLD.assignment_source IN ('rotation','training','relief','field_supervisor'
 BEGIN
   SELECT RAISE(ABORT, 'Locked workforce assignments cannot be edited');
 END;
+
+
+-- Approved leave on an already-published shift is a real coverage absence.
+-- Rebuild both shortage guards to subtract those rows before allocating relief.
+DROP TRIGGER IF EXISTS trg_relief_shortage_capacity_insert;
+DROP TRIGGER IF EXISTS trg_relief_shortage_capacity_update;
+
+CREATE TRIGGER trg_relief_shortage_capacity_insert
+BEFORE INSERT ON workforce_relief_assignments
+WHEN NEW.status IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM schedules sc
+    WHERE sc.month = substr(NEW.duty_date,1,7)
+      AND sc.department_id = NEW.target_department_id
+  ) THEN RAISE(ABORT, 'Generate the receiving desk roster before requesting relief') END;
+
+  SELECT CASE WHEN
+    (
+      SELECT COUNT(*) FROM shift_assignments sa
+      WHERE sa.schedule_id = (
+        SELECT sc.id FROM schedules sc
+        WHERE sc.month = substr(NEW.duty_date,1,7)
+          AND sc.department_id = NEW.target_department_id
+        ORDER BY sc.generated_at DESC LIMIT 1
+      )
+      AND sa.date = NEW.duty_date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND (
+        (sa.coverage_department_id = NEW.target_department_id AND sa.coverage_shift_code = NEW.shift_code)
+        OR (sa.coverage_department_id IS NULL AND sa.shift_code = NEW.shift_code)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM leave_requests l
+        WHERE l.staff_id=sa.staff_id AND l.date=sa.date AND l.status='approved'
+      )
+    )
+    +
+    (
+      SELECT COUNT(*) FROM workforce_relief_assignments r
+      WHERE r.target_department_id = NEW.target_department_id
+        AND r.duty_date = NEW.duty_date
+        AND r.shift_code = NEW.shift_code
+        AND r.status IN ('pending','approved')
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_assignments sa
+          WHERE sa.schedule_id = (
+            SELECT sc.id FROM schedules sc
+            WHERE sc.month = substr(NEW.duty_date,1,7)
+              AND sc.department_id = NEW.target_department_id
+            ORDER BY sc.generated_at DESC LIMIT 1
+          )
+          AND sa.staff_id = r.staff_id AND sa.date = r.duty_date
+          AND sa.coverage_department_id = r.target_department_id
+          AND sa.coverage_shift_code = r.shift_code
+        )
+    )
+    >= (
+      SELECT CASE WHEN NEW.shift_code = d.day_code THEN d.day_min ELSE d.night_min END
+      FROM departments d WHERE d.id = NEW.target_department_id
+    )
+    THEN RAISE(ABORT, 'No uncovered minimum remains for this relief request')
+  END;
+END;
+
+CREATE TRIGGER trg_relief_shortage_capacity_update
+BEFORE UPDATE OF status ON workforce_relief_assignments
+WHEN NEW.status IN ('pending','approved') AND OLD.status NOT IN ('pending','approved')
+BEGIN
+  SELECT CASE WHEN
+    (
+      SELECT COUNT(*) FROM shift_assignments sa
+      WHERE sa.schedule_id = (
+        SELECT sc.id FROM schedules sc
+        WHERE sc.month = substr(NEW.duty_date,1,7)
+          AND sc.department_id = NEW.target_department_id
+        ORDER BY sc.generated_at DESC LIMIT 1
+      )
+      AND sa.date = NEW.duty_date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND (
+        (sa.coverage_department_id = NEW.target_department_id AND sa.coverage_shift_code = NEW.shift_code)
+        OR (sa.coverage_department_id IS NULL AND sa.shift_code = NEW.shift_code)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM leave_requests l
+        WHERE l.staff_id=sa.staff_id AND l.date=sa.date AND l.status='approved'
+      )
+    )
+    +
+    (
+      SELECT COUNT(*) FROM workforce_relief_assignments r
+      WHERE r.id <> OLD.id
+        AND r.target_department_id = NEW.target_department_id
+        AND r.duty_date = NEW.duty_date
+        AND r.shift_code = NEW.shift_code
+        AND r.status IN ('pending','approved')
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_assignments sa
+          WHERE sa.schedule_id = (
+            SELECT sc.id FROM schedules sc
+            WHERE sc.month = substr(NEW.duty_date,1,7)
+              AND sc.department_id = NEW.target_department_id
+            ORDER BY sc.generated_at DESC LIMIT 1
+          )
+          AND sa.staff_id = r.staff_id AND sa.date = r.duty_date
+          AND sa.coverage_department_id = r.target_department_id
+          AND sa.coverage_shift_code = r.shift_code
+        )
+    )
+    >= (
+      SELECT CASE WHEN NEW.shift_code = d.day_code THEN d.day_min ELSE d.night_min END
+      FROM departments d WHERE d.id = NEW.target_department_id
+    )
+    THEN RAISE(ABORT, 'No uncovered minimum remains for this relief approval')
+  END;
+END;
