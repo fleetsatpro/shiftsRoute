@@ -188,3 +188,40 @@ test('balancing never converts an off-day on a relief-only colleague into routin
   });
   for (const code of Object.values(result.assignments['relief-only'])) assert.equal(code, 'O');
 });
+
+test('rotation fixed assignments preserve a full anchored cycle, including locked off days', () => {
+  const cycle = ['D','D','N','N','O','O','O'];
+  const fixedAssignments = { alpha: Object.create(null) };
+  for (let day = 1; day <= 14; day++) {
+    const date = '2026-12-' + String(day).padStart(2, '0');
+    fixedAssignments.alpha[date] = {
+      shift_code: cycle[(day - 1) % cycle.length],
+      assignment_source: 'rotation',
+    };
+  }
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1, max_consecutive_days: 5 }],
+    fixedAssignments,
+  });
+  for (let day = 1; day <= 14; day++) {
+    const date = '2026-12-' + String(day).padStart(2, '0');
+    assert.equal(result.assignments.alpha[date], cycle[(day - 1) % cycle.length]);
+    if (day !== 5 && day !== 6 && day !== 7 && day !== 12 && day !== 13 && day !== 14) {
+      assert.equal(result.assignmentMeta.alpha[date].assignment_source, 'rotation');
+    }
+  }
+});
+
+test('approved leave supersedes a locked rotation rest day without a warning', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0 },
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-05', 'PL']]) },
+    fixedAssignments: { alpha: { '2026-12-05': { shift_code: 'O', assignment_source: 'rotation' } } },
+  });
+  assert.equal(result.assignments.alpha['2026-12-05'], 'PL');
+  assert.ok(!result.warnings.some(warning => warning.includes('2026-12-05')));
+});

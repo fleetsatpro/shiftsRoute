@@ -119,7 +119,7 @@ export function generateSchedule({
 
   function canPlaceFixed(person, day, value, date) {
     const code = value.shift_code || value.code;
-    if (typeof code !== 'string' || !['D','N','DC','NC','T','FSA'].includes(code)) return false;
+    if (typeof code !== 'string' || !['D','N','DC','NC','O','T','FSA'].includes(code)) return false;
     const coverageCode = value.coverage_shift_code || code;
     const type = shiftType(coverageCode);
     if (type === 'day' && person.can_day === 0) return false;
@@ -129,8 +129,10 @@ export function generateSchedule({
     }
     if (state[person.id][day] !== null) return false;
     const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
-    if (nightRestRule && type === 'day' && prevType === 'night') return false;
-    if (consecutiveWork >= (person.max_consecutive_days ?? 5)) return false;
+    if (isWorkCode(code)) {
+      if (nightRestRule && type === 'day' && prevType === 'night') return false;
+      if (consecutiveWork >= (person.max_consecutive_days ?? 5)) return false;
+    }
     return true;
   }
 
@@ -139,6 +141,9 @@ export function generateSchedule({
     if (!Number.isInteger(day) || day < 1 || day > nDays || date.slice(0, 7) !== month) return;
     const fixed = fixedValue(value);
     if (!fixed) return;
+    const requestedCode = fixed.shift_code || fixed.code;
+    // Approved leave always supersedes an otherwise-rest day from a rotation.
+    if (LEAVE_CODES.has(state[person.id][day]) && requestedCode === OFF) return;
     if (!canPlaceFixed(person, day, fixed, date)) {
       warnings.push(department.id + ' ' + date + ': fixed ' + (fixed.shift_code || 'assignment') +
         ' for ' + (person.name || person.id) + ' conflicts with leave, another assignment, qualification or rest policy (' + sourceLabel + ')');
@@ -149,6 +154,7 @@ export function generateSchedule({
     assignmentMeta[person.id][date] = {
       coverage_department_id: fixed.coverage_department_id || null,
       coverage_shift_code: fixed.coverage_shift_code || null,
+      assignment_source: fixed.assignment_source || null,
     };
     lockedAssignments.add(person.id + ':' + date);
     const countsAsWork = fixed.counts_as_work !== false && isWorkCode(code);

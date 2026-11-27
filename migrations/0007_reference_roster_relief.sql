@@ -238,3 +238,26 @@ BEGIN
     THEN RAISE(ABORT, 'No uncovered minimum remains for this relief approval')
   END;
 END;
+
+
+-- Staff-specific, effective-dated rotation patterns. Codes are stored as a
+-- weekly/rolling cycle and anchored to an explicit calendar date.
+CREATE TABLE IF NOT EXISTS workforce_rotation_patterns (
+  id TEXT PRIMARY KEY,
+  staff_id TEXT NOT NULL REFERENCES staff(id),
+  department_id TEXT NOT NULL REFERENCES departments(id),
+  effective_from TEXT NOT NULL,
+  effective_to TEXT,
+  anchor_date TEXT NOT NULL,
+  cycle_codes_json TEXT NOT NULL
+    CHECK (json_valid(cycle_codes_json) AND json_type(cycle_codes_json) = 'array'
+      AND json_array_length(cycle_codes_json) BETWEEN 1 AND 28),
+  created_by TEXT NOT NULL REFERENCES staff(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (effective_to IS NULL OR effective_to >= effective_from),
+  UNIQUE(staff_id, department_id, effective_from)
+);
+CREATE INDEX IF NOT EXISTS idx_rotation_patterns_effective
+  ON workforce_rotation_patterns(department_id,staff_id,effective_from,effective_to);
+ALTER TABLE shift_assignments ADD COLUMN assignment_source TEXT NOT NULL DEFAULT 'generated'
+  CHECK (assignment_source IN ('generated','rotation','training','relief','field_supervisor','duty_ops','manual'));
