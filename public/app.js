@@ -277,8 +277,12 @@ async function loadStaffTable() {
     const name = escHtml(s.name);
     const actions = [];
     if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="reset-pin" data-staff-id="${id}" data-staff-name="${name}">Reset PIN</button>`);
-    if (s.role === 'staff') actions.push(`<button type="button" class="ghost" data-action="make-admin" data-staff-id="${id}" data-staff-name="${name}">Make admin</button>`);
-    else if (s.role === 'admin' && state.me.role === 'admin' && s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
+    if (s.id !== state.me.id) {
+      const roleOptions = state.me.role === 'admin'
+        ? ['staff','technical_assistant','hr','duty_ops_manager','admin']
+        : ['staff','technical_assistant','hr'];
+      actions.push(`<select aria-label="Change role for ${name}" data-role-staff-id="${id}">${roleOptions.map(role => `<option value="${role}" ${role === s.role ? 'selected' : ''}>${role.replaceAll('_',' ')}</option>`).join('')}</select>`);
+    }
     if (s.id !== state.me.id) actions.push(`<button type="button" class="danger" data-action="deactivate" data-staff-id="${id}" data-staff-name="${name}">Deactivate</button>`);
     return `
       <tr data-search="${escHtml([s.name, s.department_id, s.role].join(" ").toLowerCase())}">
@@ -418,6 +422,19 @@ async function resetPin(staffId, name) {
     toast(`PIN reset for ${name}; share the displayed one-time code securely.`, 'success', 5000);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function updateStaffRole(staffId, role) {
+  try {
+    await api('/staff/' + encodeURIComponent(staffId), {
+      method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role})
+    });
+    await loadStaffTable();
+    toast('Role updated and hierarchy enforced.', 'success');
+  } catch(err) {
+    await loadStaffTable();
+    toast(err.message, 'error');
   }
 }
 
@@ -1157,6 +1174,10 @@ function init() {
   el('addLeaveBtn').addEventListener('click', addLeave);
 
   // Delegated actions: no user-controlled values are interpolated into executable HTML.
+  el('staffTableBody').addEventListener('change', e => {
+    const select = e.target.closest('[data-role-staff-id]');
+    if (select) updateStaffRole(select.dataset.roleStaffId, select.value);
+  });
   el('staffTableBody').addEventListener('click', e => {
     const button = e.target.closest('[data-action]');
     if (!button) return;
