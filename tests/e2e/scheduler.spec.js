@@ -87,6 +87,45 @@ test('admin can sign in, navigate to staff management, and filter the directory 
   await expect(page.locator('#meName')).toHaveText('Test Admin');
   await expect(page.locator('#tab-team')).toBeVisible();
 
+  if (isMobile) {
+    // Assert the first viewport before any tab interaction scrolls the page.
+    await page.evaluate(() => {
+      document.documentElement.style.scrollBehavior = 'auto';
+      window.scrollTo(0, 0);
+    });
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    const layout = await page.evaluate(() => {
+      const bounds = selector => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      };
+      return {
+        header: bounds('#app > header'),
+        nav: bounds('.mobile-nav'),
+        hero: bounds('#workspaceHero'),
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(layout.header).not.toBeNull();
+    expect(layout.nav).not.toBeNull();
+    expect(layout.hero).not.toBeNull();
+    expect(Math.abs(layout.header.top)).toBeLessThanOrEqual(1);
+    expect(layout.nav.top).toBeGreaterThanOrEqual(layout.header.bottom - 1);
+    expect(layout.hero.top).toBeGreaterThanOrEqual(layout.nav.bottom - 1);
+    expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  }
+
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await page.screenshot({
+    path: testInfo.outputPath(isMobile ? 'admin-mobile-workspace.png' : 'admin-desktop-workspace.png'),
+    fullPage: false,
+  });
+
   await page.locator(isMobile ? '.mobile-nav [data-tab="staff"]' : 'aside [data-tab="staff"]').click();
   await expect(page.locator('#tab-staff')).toBeVisible();
   await expect(page.locator('#staffTableBody tr')).toHaveCount(3);
@@ -102,15 +141,22 @@ test('admin can sign in, navigate to staff management, and filter the directory 
     const tableScroller = page.locator('#tab-staff .panel > div[style*="overflow-x:auto"]');
     await expect.poll(() => tableScroller.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-directory.png'), fullPage: true });
+    await page.evaluate(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    // Viewport capture avoids sticky header/nav being painted over earlier full-page content.
+    await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-directory.png'), fullPage: false });
     await tableScroller.evaluate(node => { node.scrollLeft = node.scrollWidth; });
     await expect.poll(() => tableScroller.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
     await expect(page.locator('#staffTableBody tr:visible button').first()).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-actions.png'), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('admin-mobile-staff-actions.png'), fullPage: false });
   } else {
     await expect(page.locator('aside')).toBeVisible();
     await expect(page.locator('.mobile-nav')).toBeHidden();
-    await page.screenshot({ path: testInfo.outputPath('admin-desktop-staff-directory.png'), fullPage: true });
+    await page.evaluate(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    await page.screenshot({ path: testInfo.outputPath('admin-desktop-staff-directory.png'), fullPage: false });
   }
 });
 
