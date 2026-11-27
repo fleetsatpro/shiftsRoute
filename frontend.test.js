@@ -29,3 +29,17 @@ test('frontend is externally loaded, mobile navigable, and free of inline event 
   assert.ok(html.includes('aria-modal="true"'));
   assert.doesNotMatch(app, /\bonclick\s*=/i);
 });
+
+
+test('schedule renderer uses a prototype-safe staff ID dictionary', async () => {
+  const app = await readFile(new URL('./public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const byStaff = Object\.create\(null\);/);
+});
+
+test('dialogs support keyboard dismissal and focus containment', async () => {
+  const app = await readFile(new URL('./public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /e\.key === 'Escape'/);
+  assert.match(app, /e\.key === 'Tab' && openDialog/);
+  assert.match(app, /first\.focus\(\)/);
+  assert.match(app, /last\.focus\(\)/);
+});
