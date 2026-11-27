@@ -104,3 +104,34 @@ No green or green-adjacent accent palette. Use a premium midnight/graphite found
 - Browser tests at desktop and mobile sizes for all role workspaces.
 - Real Worker + isolated D1 integration tests for enrollment, sign-in, staff changes, schedule generation, exception approvals and audit records.
 - Production D1 migration, credential issuance, and deployment remain separate explicit release steps.
+
+## Reference roster semantics and exceptional relief (November 2026)
+
+### Shift-code catalogue
+
+| Code | Meaning | Scheduling treatment |
+|---|---|---|
+| D / N | ISOC day / night | Ordinary ISOC coverage |
+| DC / NC | SCE/SCM day / night | Ordinary SCE/SCM coverage |
+| O | Off | Rest day; not work or coverage |
+| PL / ML / SL | Paternity / maternity / sick leave | Typed leave; never coerced to Off |
+| L | General or legacy leave | Leave; retained for historical rows |
+| T | Fresh trainee | Supervised training/work time; not independent desk coverage |
+| FSA | Field Supervisor assignment | Clinton Juma's visible deployment code; actual target desk and shift stored separately |
+
+Unknown shift codes must remain visibly unknown and trigger data-quality attention. They must never be converted to O.
+
+### Cross-qualification and strict shortage relief
+
+- Mercy Dorice is a distinct operational ISOC employee; Mercy Wanyoike remains the separate HR account and is never placed on the operational roster.
+- Joan, Benson, Wayne and Mercy Dorice are cross-qualified for SCE/SCM. Their SCE qualifications are relief-only and do not make them part of the normal SCE allocation pool.
+- Every active SCE employee is cross-qualified for ISOC through a relief-only qualification. New SCE hires receive the same effective-dated relief qualification at onboarding.
+- SCE staff are not an ISOC fallback pool. An ISOC relief request is rejected unless an existing receiving-desk roster proves that the selected day/night shift is below its configured minimum. Pending and approved requests count against the remaining shortage, and database capacity triggers prevent concurrent requests from overfilling the same shortfall.
+- A separate Duty Ops Manager or the platform administrator must approve each dated deployment. A requester cannot approve their own request. The reason, shortage count, minimum headcount, reviewer and review timestamp are retained.
+- The person must be active, effectively qualified for the receiving shift, not on leave or trainee duty, not scheduled elsewhere that date, and compliant with their current night-work policy. Wayne's night duty still requires the separately approved emergency exception.
+- A cross-desk assignment is mirrored on the receiving roster and the person's home-team view, but is counted as coverage only once in the receiving department. The underlying target desk and day/night code are retained even when the visible display code is FSA.
+- Clinton Juma is configured as Field Supervisor, relief-capable for either desk, for day or night. He is not a routine staffing candidate. Only his independently approved relief deployment uses FSA.
+- Mercy Wanyoike can record PL, ML and SL for operational employees. Training is recorded as T, with a supervisor/purpose note. Leave, training and relief are mutually exclusive for the same person/date.
+- David's employment ends 30 November 2026. His account is inactive for forward scheduling; past schedule and audit rows remain available for historical reference.
+
+The relief workflow is deliberately gated: generate the receiving desk's baseline roster, identify an actual minimum-headcount shortfall, submit a reasoned dated request, obtain independent approval, then regenerate the receiving and home-team rosters. A skill preference or convenience alone is not sufficient grounds to borrow an SCE employee for ISOC.
