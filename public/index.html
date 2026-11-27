@@ -1285,6 +1285,10 @@
           <div class="panel-header"><h2>Workforce eligibility and coverage</h2></div>
           <div id="workforceCoverage" class="staff-table-wrap"></div>
         </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Emergency night-shift exceptions</h2><span class="muted">Independent approval required</span></div>
+          <div id="dutyExceptions" class="leave-list"><p class="muted">No exceptions loaded.</p></div>
+        </div>
       </section>
 
       <!-- HR workspace -->
@@ -1311,6 +1315,16 @@
             <button class="primary" type="submit">Save qualification</button>
           </form>
           <div id="hrQualificationRows" class="leave-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Leave and absence</h2></div>
+          <form id="hrLeaveForm" class="leave-form">
+            <label class="ctrl-label" for="hrLeaveStaff">Employee</label><select id="hrLeaveStaff" required></select>
+            <label class="ctrl-label" for="hrLeaveDate">Date</label><input id="hrLeaveDate" type="date" required />
+            <label class="ctrl-label" for="hrLeaveStatus">Status</label><select id="hrLeaveStatus"><option value="approved">Approved</option><option value="pending">Pending</option></select>
+            <button class="primary" type="submit">Record leave</button>
+          </form>
+          <div id="hrLeaveRows" class="leave-list"></div>
         </div>
       </section>
 
