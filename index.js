@@ -1209,7 +1209,8 @@ export default {
           .bind(schedule.department_id).first();
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, sa.date, sa.shift_code
+          `SELECT sa.staff_id, st.name AS staff_name, sa.date, sa.shift_code,
+                  sa.coverage_department_id, sa.coverage_shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
            JOIN staff_department_qualifications q ON q.staff_id = st.id AND q.department_id = ?
@@ -1218,29 +1219,43 @@ export default {
            ORDER BY sa.date, st.name`
         ).bind(schedule.department_id, id, schedule.month + '-31', schedule.month + '-01', schedule.month + '-31', schedule.month + '-01').all();
 
-        const myShifts = {};
+        const myShifts = Object.create(null);
+        const myShiftDetails = Object.create(null);
         for (const row of assignments) {
-          if (row.staff_id === me.id) myShifts[row.date] = row.shift_code;
+          if (row.staff_id === me.id) {
+            myShifts[row.date] = row.shift_code;
+            myShiftDetails[row.date] = {
+              shift_code: row.shift_code,
+              coverage_department_id: row.coverage_department_id || null,
+              coverage_shift_code: row.coverage_shift_code || null,
+            };
+          }
         }
 
-        const workingCodes = new Set([dept.day_code, dept.night_code]);
-        const coworkersByDate = {};
+        const workingCodes = new Set(['D','N','DC','NC','T','FSA']);
+        const coworkersByDate = Object.create(null);
         for (const date of Object.keys(myShifts)) {
-          const myCode = myShifts[date];
-          if (!workingCodes.has(myCode)) continue;
+          const detail = myShiftDetails[date];
+          const coverageCode = detail.coverage_shift_code || detail.shift_code;
+          if (!workingCodes.has(detail.shift_code) && !workingCodes.has(coverageCode)) continue;
           coworkersByDate[date] = assignments
-            .filter(r => r.date === date && r.shift_code === myCode && r.staff_id !== me.id)
-            .map(r => r.staff_name);
+            .filter(row => row.date === date && row.staff_id !== me.id
+              && ((detail.coverage_department_id && row.coverage_department_id === detail.coverage_department_id
+                    && row.coverage_shift_code === coverageCode)
+                || (!detail.coverage_department_id && (row.coverage_shift_code || row.shift_code) === coverageCode)))
+            .map(row => row.staff_name);
         }
 
         return json({
           schedule_id: id,
           month: schedule.month,
           status: schedule.status,
-          department_id: me.department_id,
+          department_id: schedule.department_id,
+          home_department_id: me.department_id,
           day_code: dept.day_code,
           night_code: dept.night_code,
           my_shifts: myShifts,
+          my_shift_details: myShiftDetails,
           coworkers_by_date: coworkersByDate,
         });
       }
@@ -1256,7 +1271,8 @@ export default {
         }
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override
+          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override,
+                  sa.coverage_department_id, sa.coverage_shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
            WHERE sa.schedule_id = ?
@@ -1345,7 +1361,8 @@ export default {
         }
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code
+          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code,
+                  sa.coverage_department_id, sa.coverage_shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
            WHERE sa.schedule_id = ?
@@ -1420,19 +1437,18 @@ async function getPriorFinalState(db, month, departmentId, staffRows, dept) {
   const priorFinalState = {};
   for (const s of staffRows) {
     const { results } = await db.prepare(
-      'SELECT date, shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date <= ? ORDER BY date DESC LIMIT 6'
+      'SELECT date, shift_code, coverage_shift_code FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date <= ? ORDER BY date DESC LIMIT 7'
     ).bind(prevSchedule.id, s.id, lastDate).all();
     if (results.length === 0) continue;
 
-    const lastCode = results[0].shift_code;
+    const lastCode = results[0].coverage_shift_code || results[0].shift_code;
     let consecutiveWork = 0;
-    for (const r of results) {
-      if (r.shift_code === dept.day_code || r.shift_code === dept.night_code) consecutiveWork++;
+    for (const row of results) {
+      if (['D','N','DC','NC','T','FSA'].includes(row.shift_code)) consecutiveWork++;
       else break;
     }
     priorFinalState[s.id] = {
-      // Store as type strings; solver.js maps back to codes on use
-      lastShift: lastCode === dept.night_code ? 'night' : lastCode === dept.day_code ? 'day' : null,
+      lastShift: ['N','NC'].includes(lastCode) ? 'night' : ['D','DC'].includes(lastCode) ? 'day' : null,
       consecutiveWork,
     };
   }
