@@ -863,6 +863,43 @@
     }
   }
 
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0 0 18px;
+  }
+  .metric-card {
+    min-width: 0;
+    padding: 14px 16px;
+    border: 1px solid rgba(105,126,158,.24);
+    border-radius: 10px;
+    background: linear-gradient(145deg, rgba(31,42,60,.82), rgba(18,24,35,.94));
+    box-shadow: 0 8px 22px rgba(0,0,0,.16);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .metric-label {
+    color: var(--text-2); font: 600 10px var(--font-mono);
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .metric-card strong {
+    color: var(--text); font: 600 26px var(--font-mono);
+    letter-spacing: -.04em; line-height: 1.25;
+  }
+  .metric-note { color: var(--text-3); font-size: 10px; }
+  #staffSearch { min-width: 180px; }
+  @media (max-width: 900px) {
+    .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 540px) {
+    .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .metric-card { padding: 11px 12px; }
+    .metric-card strong { font-size: 23px; }
+    #staffSearch { min-width: 100%; }
+  }
+
 </style>
 </head>
 <body>
@@ -1035,6 +1072,13 @@
           <h1>Team Grid</h1>
           <span class="page-sub" id="teamGridMonth"></span>
         </div>
+        <section id="teamMetrics" class="metrics-grid hidden" aria-label="Roster summary">
+          <article class="metric-card"><span class="metric-label">Rostered staff</span><strong id="metricStaff">—</strong><span class="metric-note">People on this roster</span></article>
+          <article class="metric-card"><span class="metric-label">Day shifts</span><strong id="metricDay">—</strong><span class="metric-note">Assigned day duties</span></article>
+          <article class="metric-card"><span class="metric-label">Night shifts</span><strong id="metricNight">—</strong><span class="metric-note">Assigned night duties</span></article>
+          <article class="metric-card"><span class="metric-label">Leave days</span><strong id="metricLeave">—</strong><span class="metric-note">Locked leave assignments</span></article>
+          <article class="metric-card"><span class="metric-label">Manual changes</span><strong id="metricOverrides">—</strong><span class="metric-note">Human overrides recorded</span></article>
+        </section>
         <div class="panel" id="schedulePanel">
           <div class="panel-header">
             <h2>Schedule Grid</h2>
@@ -1097,7 +1141,8 @@
           <div class="panel-header">
             <h2>Active Staff</h2>
             <div class="panel-actions">
-              <button id="addStaffBtn" class="primary">+ Add staff</button>
+              <input id="staffSearch" type="search" placeholder="Search staff…" aria-label="Search staff by name, department or role" />
+              <button id="addStaffBtn" class="primary">Add staff</button>
             </div>
           </div>
           <div style="overflow-x:auto;">
