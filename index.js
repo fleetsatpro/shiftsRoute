@@ -1010,7 +1010,7 @@ export default {
         const denied = requireAnyPermission('coverage.allocate');
         if (denied) return denied;
         const body = await request.json();
-        if (!isValidCalendarDate(body.duty_date)) {
+        if (!isValidCalendarDate(body.duty_date)
           || typeof body.manager_staff_id !== 'string'
           || !['floating','team_cover'].includes(body.assignment_type || 'floating')) {
           return json({ error: 'Invalid duty assignment' }, { status: 400 });
