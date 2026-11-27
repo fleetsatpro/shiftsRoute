@@ -1,6 +1,6 @@
 # ROC Workforce Operating Model
 
-Status: implementation and release specification for PR #2. The workforce schema, core Worker APIs, solver eligibility controls, HR workspace and Duty Ops workspace are implemented on the feature branch. Production migration and deployment remain separate release steps.
+Status: reference-roster implementation and release specification for draft PR #5. The code, migration 0007 and regression tests are on feat/reference-driven-roster-relief-model. Production D1 remains at migrations 0001–0006; migration 0007, credential changes and Worker deployment remain separate release steps.
 
 ## Product goals
 
@@ -42,10 +42,13 @@ Changes to qualifications are effective-dated so historical schedules remain exp
 - Hilda and Mukasa: Duty Ops Managers with full administrative rights and senior operational authority over all controllers; rotate daily day-duty fairly. Both may cover day shortages in ISOC or SCE when qualified and available.
 - Wayne: Technical Assistant; eligible for configured cross-team shortage support. Night work is disabled by default and only possible through a recorded emergency exception with authorized approval.
 - Mercy Wanyoike: individual HR account and HR workspace; not an ISOC roster member.
+- Mercy Dorice: distinct operational ISOC employee; never conflate her account with Mercy Wanyoike.
 - Cate and Oliera: ISOC staff.
-- Benson and Joan: add SCE qualification for rotation/shortage support while preserving their home department.
-- David: deactivate account and remove from future eligibility; preserve historical schedule/audit references.
-- HR: Mercy Wanyoike is the named HR account holder. Create an individual account and HR workspace; never create a shared generic HR credential.
+- Benson and Joan: preserve their home-team membership; SCE qualifications are relief-only, not a normal SCE staffing pool.
+- All active SCE staff receive an ISOC relief-only qualification; the qualification workflow applies this to future SCE hires.
+- Clinton Juma: Field Supervisor, relief-capable for either desk on day or night; only approved deployments appear as FSA.
+- David: account inactive with employment end date 2026-11-30; preserve historical schedule/audit references.
+- HR: Mercy Wanyoike is the named HR account holder. Never create a shared generic HR credential.
 
 Existing Stephen and Murad administrator grants require an explicit least-privilege review. Do not silently retain or revoke either grant as a side effect of this migration.
 
@@ -78,8 +81,10 @@ The optimizer must report infeasibility and explain the smallest shortage set ra
 - DOMs have authority level 900; Griffin has platform-owner level 1000. DOMs cannot modify accounts at or above their own authority.
 - The monthly Duty Ops rota balances manager duty counts and cross-team shortage coverage. Uncovered dates are explicit exceptions, never fabricated assignments.
 - Team-cover Duty Ops assignments are locked into future generated department rosters; the solver preserves these fixed assignments.
-- Cross-qualified staff are included once per department and can only receive shift types enabled by their effective qualification and shift policy.
-- Wayne's Technical Assistant role is day-only. Night work requires a date-specific exception requested with a reason and approved by a different authorized reviewer.
+- Cross-qualified staff have effective-dated relief-only qualifications and are excluded from routine staffing pools and balancing. They enter a generated schedule only through an approved, date-specific relief assignment after a verified receiving-desk minimum shortage.
+- Wayne is day-only for routine work. A night assignment requires the separately recorded emergency exception requested with a reason and approved by a different authorized reviewer.
+- Cross-desk relief is checked across the employee's latest home/receiving desk schedules for same-date conflicts, night-to-day recovery, active rotation and maximum consecutive work days.
+- Typed leave (PL/ML/SL), general L, T, and FSA are stored and rendered as distinct states. Unknown codes are never coerced to Off.
 - HR can onboard operational staff, manage leave, record qualifications and configure per-person shift policies. New employees have no scheduling qualification until HR records verified eligibility.
 - David is deactivated and sessions are revoked; historical schedule records remain intact.
 
