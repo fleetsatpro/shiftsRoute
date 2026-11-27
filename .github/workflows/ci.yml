@@ -41,7 +41,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shiftsroute-playwright-${{ github.run_id }}
-          path:
+          path: |
             playwright-report/
             test-results/
           if-no-files-found: ignore
