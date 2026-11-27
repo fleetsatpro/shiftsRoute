@@ -14,6 +14,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply raw-ter-shift --remote --config wrangler.toml"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.0.0",
+    "@playwright/test": "^1.0.0"
   }
 }
