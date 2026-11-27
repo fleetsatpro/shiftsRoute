@@ -594,12 +594,14 @@ async function loadHRWorkspace() {
     api('/workforce/overview'),
     api('/workforce/policies'),
     api('/workforce/staff-markers?month=' + encodeURIComponent(month)),
+    api('/workforce/rotation-patterns?month=' + encodeURIComponent(month)),
   ]);
   state.hrStaff = staff;
   state.hrQualifications = qualifications;
   state.hrLeave = leave;
   state.hrPolicies = policies;
   state.hrMarkers = markers;
+  state.hrRotationPatterns = rotationPatterns;
   el('hrActiveCount').textContent = staff.filter(person => person.active).length;
   el('hrPendingCount').textContent = staff.filter(person => person.active && !person.pin_set).length;
   el('hrQualificationCount').textContent = qualifications.filter(q => !q.effective_to).length;
@@ -617,9 +619,13 @@ async function loadHRWorkspace() {
   el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrPolicyStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrTraineeStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrRotationStaff').innerHTML = operationalStaff.filter(person => ['ISOC','SCE'].includes(person.department_id))
+    .map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrRotationDept').innerHTML = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
   el('hrPolicyRows').innerHTML = policies.map(policy => `<div class="list-row"><strong>${escHtml(policy.staff_name)}</strong><span class="muted">${escHtml(policy.night_mode)} · max ${policy.max_consecutive_days} consecutive · rest ${policy.min_rest_hours}h</span></div>`).join('');
   el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="code-badge shift-${safeShiftCode(item.leave_type || 'L')}">${escHtml(item.leave_type || 'L')}</span> <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
   el('hrTraineeRows').innerHTML = markers.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(item.staff_name)} <span class="code-badge shift-T">T</span> <span class="muted">${escHtml(item.reason)}</span></div>`).join('') || '<p class="muted">No training assignments recorded for this month.</p>';
+  el('hrRotationRows').innerHTML = rotationPatterns.map(item => `<div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.department_name)} <span class="muted">${escHtml(item.effective_from)}${item.effective_to ? " – " + escHtml(item.effective_to) : " · current"}</span><span class="code-badge">${escHtml((item.cycle_codes || []).join(' · '))}</span></div>`).join('') || '<p class="muted">No effective rotation patterns configured.</p>';
   el('hrQualificationRows').innerHTML = qualifications.map(q => `
     <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_name)}
     <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''}${q.relief_only ? ' · relief-only (approval required)' : ' · primary qualification'} · from ${escHtml(q.effective_from)}${q.effective_to ? ' · to ' + escHtml(q.effective_to) : ' · current'}</span></div>`).join('') || '<p class="muted">No verified qualifications recorded.</p>';
@@ -770,6 +776,23 @@ async function reviewReliefAssignment(id, status) {
     });
     await loadDutyWorkspace();
     toast('Relief deployment ' + status + '.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function saveRotationPattern(event) {
+  event.preventDefault();
+  const cycle_codes = el('hrRotationCodes').value.split(',').map(code => code.trim().toUpperCase()).filter(Boolean);
+  const payload = {
+    staff_id: el('hrRotationStaff').value,
+    department_id: el('hrRotationDept').value,
+    effective_from: el('hrRotationEffective').value,
+    anchor_date: el('hrRotationAnchor').value,
+    cycle_codes,
+  };
+  try {
+    await api('/workforce/rotation-patterns', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Rotation pattern saved and effective-dated.', 'success');
   } catch(err) { toast(err.message, 'error'); }
 }
 
@@ -1363,6 +1386,7 @@ function init() {
   el('hrPolicyForm').addEventListener('submit', saveHrPolicy);
   el('hrLeaveForm').addEventListener('submit', saveHrLeave);
   el('hrTraineeForm').addEventListener('submit', saveTraineeMarker);
+  el('hrRotationForm').addEventListener('submit', saveRotationPattern);
   el('dutyReliefForm').addEventListener('submit', submitReliefAssignment);
   el('dutyReliefDept').addEventListener('change', updateReliefShiftOptions);
   el('dutyReliefRows').addEventListener('click', event => {
