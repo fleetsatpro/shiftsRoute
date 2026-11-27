@@ -314,3 +314,29 @@ test('allocator reserves consecutive-work capacity before future locked work', (
     'the prior streak plus 17th and 18th would exceed five consecutive days');
   assert.equal(result.assignments['b-ready']['2026-12-17'], 'D');
 });
+
+
+test('unknown leave codes are rejected instead of being silently rewritten as generic leave', () => {
+  assert.throws(() => generateSchedule({
+    month: '2026-12',
+    department: dept,
+    staff: [{ id: 'alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-03', 'UNKNOWN']]) },
+  }), /Unsupported leave code "UNKNOWN"/);
+});
+
+test('a locked rotation conflict is returned as a hard fixed-assignment conflict', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { ...dept, day_min: 0, day_max: 0, night_min: 0, night_max: 0 },
+    staff: [{ id: 'alpha', name: 'Alpha', can_day: 1, can_night: 1 }],
+    leaveByStaff: { alpha: new Map([['2026-12-03', 'SL']]) },
+    fixedAssignments: {
+      alpha: { '2026-12-03': { shift_code: 'D', assignment_source: 'rotation' } },
+    },
+  });
+  assert.equal(result.assignments.alpha['2026-12-03'], 'SL');
+  assert.equal(result.fixedConflicts.length, 1);
+  assert.equal(result.fixedConflicts[0].source, 'rotation');
+  assert.equal(result.fixedConflicts[0].date, '2026-12-03');
+});

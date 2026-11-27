@@ -124,7 +124,10 @@ export default {
             "INSERT INTO app_settings (key, value) VALUES ('initial_admin_enrolled', ?)"
           ).bind(new Date().toISOString()));
         }
-        await env.DB.batch(statements);
+        const enrollmentWrites = await env.DB.batch(statements);
+        if (!enrollmentWrites?.[0]?.meta?.changes) {
+          return json({ error: 'This enrollment code has already been used. Sign in or request a new enrollment code.' }, { status: 409 });
+        }
         enrollmentStage = 'verify_persisted_credential';
         const enrolled = await env.DB.prepare('SELECT pin_set FROM staff WHERE id = ?').bind(staff_id).first();
         if (!enrolled?.pin_set) return json({ error: 'Account enrollment could not be completed' }, { status: 409 });
@@ -1431,6 +1434,27 @@ export default {
           }
         }
 
+        const { results: pendingHomeReliefRows } = await env.DB.prepare(
+          'SELECT r.staff_id,r.duty_date,s.name FROM workforce_relief_assignments r ' +
+          'JOIN staff s ON s.id=r.staff_id ' +
+          "WHERE r.status='pending' AND r.duty_date LIKE ? AND s.department_id=? ORDER BY r.duty_date,s.name"
+        ).bind(month + '-%', department_id).all();
+        for (const pendingRelief of pendingHomeReliefRows) {
+          const person = staffRows.find(item => item.id === pendingRelief.staff_id);
+          if (!person) {
+            return json({ error: 'Pending relief for ' + pendingRelief.name + ' has no active primary home-desk qualification; resolve the request before generating this roster' }, { status: 409 });
+          }
+          const fixed = fixedAssignments[pendingRelief.staff_id]?.[pendingRelief.duty_date];
+          if (fixed && (fixed.shift_code || fixed.code) !== 'O') {
+            return json({ error: 'Pending relief for ' + pendingRelief.name + ' conflicts with a locked home-desk rotation or training assignment' }, { status: 409 });
+          }
+          if (!fixedAssignments[pendingRelief.staff_id]) fixedAssignments[pendingRelief.staff_id] = Object.create(null);
+          fixedAssignments[pendingRelief.staff_id][pendingRelief.duty_date] = {
+            shift_code: 'O',
+            assignment_source: 'generated',
+          };
+        }
+
         const { results: reliefRows } = await env.DB.prepare(
           'SELECT r.*, s.name, s.department_id AS home_department_id, q.can_day, ' +
           "CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, " +
@@ -1537,9 +1561,16 @@ export default {
         const priorFinalState = await getPriorFinalState(env.DB, month, department_id, staffRows, dept);
         const preassignedAssignments = Object.fromEntries(dutyAssignments.map(row => [row.duty_date, row.manager_staff_id]));
 
-        const { assignments, assignmentMeta, warnings, totals } = generateSchedule({
+        const { assignments, assignmentMeta, warnings, totals, fixedConflicts } = generateSchedule({
           month, department: dept, staff: staffRows, leaveByStaff, priorFinalState, preassignedAssignments, fixedAssignments,
         });
+        if (fixedConflicts.length) {
+          return json({
+            error: 'Roster generation stopped because one or more approved or locked workforce assignments conflict with the requested schedule.',
+            fixed_conflicts: fixedConflicts,
+            warnings,
+          }, { status: 409 });
+        }
 
         const scheduleId = uuid();
         const now = new Date().toISOString();
@@ -1681,10 +1712,17 @@ export default {
       if (mineMatch && request.method === 'GET') {
         const id = mineMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
-        const qualification = schedule ? await env.DB.prepare(
-          "SELECT 1 AS eligible FROM staff_department_qualifications WHERE staff_id = ? AND department_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?) LIMIT 1"
-        ).bind(me.id, schedule.department_id, schedule.month + '-31', schedule.month + '-01').first() : null;
-        if (!schedule || (schedule.department_id !== me.department_id && !qualification)) {
+        const [approvedReliefAccess, namedDutyCoverAccess] = schedule && schedule.department_id !== me.department_id
+          ? await Promise.all([
+              env.DB.prepare(
+                "SELECT 1 AS eligible FROM workforce_relief_assignments WHERE staff_id=? AND target_department_id=? AND status='approved' AND duty_date LIKE ? LIMIT 1"
+              ).bind(me.id, schedule.department_id, schedule.month + '-%').first(),
+              env.DB.prepare(
+                "SELECT 1 AS eligible FROM duty_ops_assignments WHERE manager_staff_id=? AND coverage_department_id=? AND status IN ('assigned','confirmed') AND duty_date LIKE ? LIMIT 1"
+              ).bind(me.id, schedule.department_id, schedule.month + '-%').first(),
+            ])
+          : [null, null];
+        if (!schedule || (schedule.department_id !== me.department_id && !approvedReliefAccess && !namedDutyCoverAccess)) {
           return json({ error: 'Not found' }, { status: 404 });
         }
 
@@ -1788,7 +1826,7 @@ export default {
         }
 
         const department = await env.DB.prepare(
-          'SELECT day_code, night_code FROM departments WHERE id = ?'
+          'SELECT id, day_code, night_code, night_rest_rule FROM departments WHERE id = ?'
         ).bind(targetSchedule.department_id).first();
         const validCodes = department
           ? [department.day_code, department.night_code, 'O', 'L']
@@ -1797,26 +1835,145 @@ export default {
           return json({ error: 'Shift code is not valid for this department' }, { status: 400 });
         }
 
-        // Confirm the staff member belongs to the schedule's department.
         const existing = await env.DB.prepare(
-          `SELECT sa.id FROM shift_assignments sa
-           JOIN staff st ON st.id = sa.staff_id
-           WHERE sa.schedule_id = ? AND sa.staff_id = ? AND sa.date = ?
-             AND st.department_id = ?`
-        ).bind(scheduleId, staff_id, date, targetSchedule.department_id).first();
-        if (!existing) return json({ error: 'Assignment not found' }, { status: 404 });
+          `SELECT sa.id,sa.assignment_source,sa.coverage_department_id,sa.coverage_shift_code,
+                  st.active,st.department_id
+           FROM shift_assignments sa
+           JOIN staff st ON st.id=sa.staff_id
+           WHERE sa.schedule_id=? AND sa.staff_id=? AND sa.date=?`
+        ).bind(scheduleId, staff_id, date).first();
+        if (!existing || existing.active !== 1) return json({ error: 'Active assignment not found' }, { status: 404 });
+        if (existing.department_id !== targetSchedule.department_id) {
+          return json({ error: 'Cross-desk deployments must be changed through their approved relief record, not a home-roster edit' }, { status: 409 });
+        }
 
-        const update = await env.DB.prepare(
-          `UPDATE shift_assignments
-           SET shift_code = ?, is_manual_override = 1
-           WHERE schedule_id = ? AND staff_id = ? AND date = ?
-             AND EXISTS (SELECT 1 FROM schedules WHERE id = ? AND status = 'draft')`
-        ).bind(shift_code, scheduleId, staff_id, date, scheduleId).run();
+        const lockedSources = new Set(['rotation','training','relief','field_supervisor','duty_ops']);
+        if (lockedSources.has(existing.assignment_source)
+          || existing.coverage_department_id || existing.coverage_shift_code) {
+          return json({ error: 'This row is a locked rotation, training, cross-desk relief or Duty Ops assignment. Create a new approved workforce record instead of editing it.' }, { status: 409 });
+        }
+
+        const [leave, training, activeRelief] = await Promise.all([
+          env.DB.prepare(
+            "SELECT id FROM leave_requests WHERE staff_id=? AND date=? AND status IN ('pending','approved')"
+          ).bind(staff_id,date).first(),
+          env.DB.prepare(
+            "SELECT id FROM workforce_staff_markers WHERE staff_id=? AND date=? AND marker_code='T' AND status='approved'"
+          ).bind(staff_id,date).first(),
+          env.DB.prepare(
+            "SELECT id FROM workforce_relief_assignments WHERE staff_id=? AND duty_date=? AND status IN ('pending','approved')"
+          ).bind(staff_id,date).first(),
+        ]);
+        if (leave || training || activeRelief) {
+          return json({ error: 'The assignment conflicts with leave, supervised training or an active relief request. Resolve the workforce record first.' }, { status: 409 });
+        }
+
+        if (shift_code === department.day_code || shift_code === department.night_code) {
+          const [qualification, policy] = await Promise.all([
+            env.DB.prepare(
+              'SELECT can_day,can_night,relief_only FROM staff_department_qualifications ' +
+              'WHERE staff_id=? AND department_id=? AND relief_only=0 AND effective_from<=? ' +
+              'AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1'
+            ).bind(staff_id,targetSchedule.department_id,date,date).first(),
+            env.DB.prepare(
+              'SELECT night_mode,max_consecutive_days FROM staff_shift_policies WHERE staff_id=?'
+            ).bind(staff_id).first(),
+          ]);
+          if (!qualification) return json({ error: 'A current primary home-desk qualification is required for manual work assignments' }, { status: 409 });
+          if (shift_code === department.day_code && qualification.can_day !== 1) {
+            return json({ error: 'The employee is not qualified for this day shift' }, { status: 409 });
+          }
+          if (shift_code === department.night_code) {
+            if (policy?.night_mode && policy.night_mode !== 'allowed') {
+              const exception = policy.night_mode === 'exception_only'
+                ? await env.DB.prepare(
+                    "SELECT id FROM workforce_shift_exceptions WHERE staff_id=? AND date=? AND shift_code=? AND status='approved'"
+                  ).bind(staff_id,date,shift_code).first()
+                : null;
+              if (!exception) return json({ error: 'Night work requires an approved date-specific exception under this employee policy' }, { status: 409 });
+            } else if (qualification.can_night !== 1) {
+              return json({ error: 'The employee is not qualified for this night shift' }, { status: 409 });
+            }
+          }
+
+          const [otherDeskAssignment, neighbouringAssignments, homeDepartment] = await Promise.all([
+            env.DB.prepare(
+              "SELECT sa.id FROM shift_assignments sa JOIN schedules sc ON sc.id=sa.schedule_id " +
+              "WHERE sa.staff_id=? AND sa.date=? AND sc.id<>? " +
+              "AND sa.shift_code NOT IN ('O','L','PL','ML','SL') " +
+              "AND sc.id=(SELECT latest.id FROM schedules latest WHERE latest.month=sc.month " +
+              "AND latest.department_id=sc.department_id ORDER BY latest.generated_at DESC LIMIT 1) LIMIT 1"
+            ).bind(staff_id,date,scheduleId).first(),
+            env.DB.prepare(
+              "SELECT DISTINCT sa.date,COALESCE(sa.coverage_shift_code,sa.shift_code) AS effective_code " +
+              "FROM shift_assignments sa JOIN schedules sc ON sc.id=sa.schedule_id " +
+              "WHERE sa.staff_id=? AND sa.date BETWEEN date(?,'-7 days') AND date(?,'+1 day') AND sa.date<>? " +
+              "AND sa.shift_code NOT IN ('O','L','PL','ML','SL') " +
+              "AND sc.id=(SELECT latest.id FROM schedules latest WHERE latest.month=sc.month " +
+              "AND latest.department_id=sc.department_id ORDER BY latest.generated_at DESC LIMIT 1)"
+            ).bind(staff_id,date,date,date).all(),
+            env.DB.prepare('SELECT night_rest_rule FROM departments WHERE id=?').bind(existing.department_id).first(),
+          ]);
+          if (otherDeskAssignment) {
+            return json({ error: 'The employee already has work in another desk on this date' }, { status: 409 });
+          }
+
+          const workCodesByDate = new Map();
+          for (const row of neighbouringAssignments.results || []) {
+            if (!workCodesByDate.has(row.date)) workCodesByDate.set(row.date, []);
+            workCodesByDate.get(row.date).push(row.effective_code);
+          }
+          const previousDate = new Date(Date.parse(date + 'T00:00:00Z') - 86400000).toISOString().slice(0,10);
+          const nextDate = new Date(Date.parse(date + 'T00:00:00Z') + 86400000).toISOString().slice(0,10);
+          let beforeStreak = 0;
+          let afterStreak = 0;
+          for (let offset=1;offset<=7;offset++) {
+            const prior = new Date(Date.parse(date + 'T00:00:00Z') - offset * 86400000).toISOString().slice(0,10);
+            if (!workCodesByDate.has(prior)) break;
+            beforeStreak++;
+          }
+          for (let offset=1;offset<=7;offset++) {
+            const next = new Date(Date.parse(date + 'T00:00:00Z') + offset * 86400000).toISOString().slice(0,10);
+            if (!workCodesByDate.has(next)) break;
+            afterStreak++;
+          }
+          const maximum = Number(policy?.max_consecutive_days || 5);
+          if (beforeStreak + 1 + afterStreak > maximum) {
+            return json({ error: 'This manual assignment would exceed the employee’s maximum consecutive work days across both desks' }, { status: 409 });
+          }
+          const previousCodes = workCodesByDate.get(previousDate) || [];
+          const nextCodes = workCodesByDate.get(nextDate) || [];
+          const enforceNightRest = department.night_rest_rule === 1 || homeDepartment?.night_rest_rule === 1;
+          if (enforceNightRest && (
+            (shift_code === department.day_code && previousCodes.some(code => ['N','NC'].includes(code)))
+            || (shift_code === department.night_code && nextCodes.some(code => ['D','DC','T'].includes(code)))
+          )) {
+            return json({ error: 'This manual assignment violates the configured night-to-day recovery rule across desks' }, { status: 409 });
+          }
+        }
+
+        let update;
+        try {
+          update = await env.DB.prepare(
+            "UPDATE shift_assignments SET shift_code=?,is_manual_override=1," +
+            "coverage_department_id=NULL,coverage_shift_code=NULL,assignment_source='manual' " +
+            "WHERE id=? AND EXISTS (SELECT 1 FROM schedules WHERE id=? AND status='draft')"
+          ).bind(shift_code,existing.id,scheduleId).run();
+        } catch (error) {
+          const message = String(error?.message || error);
+          if (/leave|training|relief|locked|workforce/i.test(message)) {
+            return json({ error: 'The assignment conflicts with an approved workforce record or a locked allocation. Refresh and resolve the source record first.' }, { status: 409 });
+          }
+          throw error;
+        }
         if (!update.meta?.changes) {
           return json({ error: 'Schedule is no longer editable; reload before making changes' }, { status: 409 });
         }
-
-        return json({ updated: true });
+        await env.DB.prepare(
+          'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
+        ).bind(me.id,'schedule.assignment.manual_override','shift_assignment',existing.id,
+          JSON.stringify({ schedule_id:scheduleId,staff_id,date,shift_code })).run();
+        return json({ updated: true, assignment_source: 'manual' });
       }
 
       // ── Publish ───────────────────────────────────────────────────────

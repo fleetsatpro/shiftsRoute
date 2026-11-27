@@ -69,3 +69,27 @@ test('the ordered D1 migration chain is present and contiguous', () => {
     '0007_reference_roster_relief.sql',
   ]);
 });
+
+
+test('hosted preview E2E uses a distinct isolated synthetic-only D1 database', () => {
+  const e2eSource = read('./wrangler.routesa.e2e-preview.toml');
+  const e2eDb = databaseConfig(e2eSource);
+  const production = databaseConfig(read('./wrangler.toml'));
+  const sharedPreview = databaseConfig(read('./wrangler.routesa.preview.toml'));
+  assert.equal(stringField(e2eSource, 'name'), 'shiftsroute-e2e');
+  assert.equal(e2eDb.name, 'raw-ter-shift-pr1-e2e');
+  assert.equal(e2eDb.id, '8da5bc85-6f45-44a4-b00d-4b93692fd643');
+  assert.notEqual(e2eDb.id, production.id);
+  assert.notEqual(e2eDb.id, sharedPreview.id);
+  assert.equal(e2eDb.binding, 'DB');
+  assert.equal(e2eDb.migrationsDir, 'migrations');
+  assert.match(e2eSource, /^workers_dev = false$/m);
+  assert.match(e2eSource, /^preview_urls = true$/m);
+});
+
+test('hosted Worker preview E2E is enabled for same-repository PRs, not just PR #1', () => {
+  const workflow = read('./.github/workflows/ci.yml');
+  assert.match(workflow, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.doesNotMatch(workflow, /pull_request\.number == 1/);
+  assert.match(workflow, /group: shiftsroute-worker-preview-e2e/);
+});

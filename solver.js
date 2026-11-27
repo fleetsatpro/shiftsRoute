@@ -20,20 +20,26 @@ export function isWeekend(yyyymm, day) {
 }
 
 function leaveCodeFor(value, date) {
+  const validate = code => {
+    if (typeof code !== 'string' || !LEAVE_CODES.has(code)) {
+      throw new TypeError('Unsupported leave code "' + String(code) + '" for ' + date);
+    }
+    return code;
+  };
   if (value instanceof Set) return value.has(date) ? 'L' : null;
   if (value instanceof Map) {
     const code = value.get(date);
-    return code ? (LEAVE_CODES.has(code) ? code : 'L') : null;
+    return code == null ? null : validate(code);
   }
   if (Array.isArray(value)) {
     const item = value.find(entry => typeof entry === 'string' ? entry === date : entry?.date === date);
     if (!item) return null;
-    const code = typeof item === 'string' ? 'L' : item.leave_type || item.shift_code || 'L';
-    return LEAVE_CODES.has(code) ? code : 'L';
+    const code = typeof item === 'string' ? 'L' : (item.leave_type ?? item.shift_code ?? 'L');
+    return validate(code);
   }
-  if (value && typeof value === 'object' && value[date]) {
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, date)) {
     const code = value[date];
-    return LEAVE_CODES.has(code) ? code : 'L';
+    return code == null ? null : validate(code);
   }
   return null;
 }
@@ -80,6 +86,7 @@ export function generateSchedule({
   const dayCode = department.day_code;
   const nightCode = department.night_code;
   const warnings = [];
+  const fixedConflicts = [];
   const state = Object.create(null);
   const assignmentMeta = Object.create(null);
   const totals = Object.create(null);
@@ -166,13 +173,28 @@ export function generateSchedule({
 
   function applyFixed(person, date, value, sourceLabel) {
     const day = Number(date.slice(-2));
-    if (!Number.isInteger(day) || day < 1 || day > nDays || date.slice(0, 7) !== month) return;
+    if (!Number.isInteger(day) || day < 1 || day > nDays || date.slice(0, 7) !== month) {
+      fixedConflicts.push({ staff_id: person.id, date, source: sourceLabel, reason: 'Fixed assignment date is outside the requested schedule month' });
+      warnings.push(department.id + ' ' + date + ': fixed assignment is outside the requested schedule month (' + sourceLabel + ')');
+      return;
+    }
     const fixed = fixedValue(value);
-    if (!fixed) return;
+    if (!fixed) {
+      fixedConflicts.push({ staff_id: person.id, date, source: sourceLabel, reason: 'Fixed assignment data is invalid' });
+      return;
+    }
     const requestedCode = fixed.shift_code || fixed.code;
     // Approved leave always supersedes an otherwise-rest day from a rotation.
     if (LEAVE_CODES.has(state[person.id][day]) && requestedCode === OFF) return;
     if (!canPlaceFixed(person, day, fixed, date)) {
+      fixedConflicts.push({
+        staff_id: person.id,
+        staff_name: person.name || person.id,
+        date,
+        shift_code: requestedCode || null,
+        source: fixed.assignment_source || sourceLabel,
+        reason: 'Conflicts with leave, another assignment, qualification or rest policy',
+      });
       warnings.push(department.id + ' ' + date + ': fixed ' + (fixed.shift_code || 'assignment') +
         ' for ' + (person.name || person.id) + ' conflicts with leave, another assignment, qualification or rest policy (' + sourceLabel + ')');
       return;
@@ -209,10 +231,18 @@ export function generateSchedule({
     const person = staffById.get(personId);
     if (!person || !Number.isInteger(day) || day < 1 || day > nDays) continue;
     if (state[personId][day] !== null) {
+      fixedConflicts.push({
+        staff_id: personId,
+        staff_name: person.name || personId,
+        date,
+        shift_code: dayCode,
+        source: 'duty_ops',
+        reason: 'Conflicts with another fixed assignment',
+      });
       warnings.push(department.id + ' ' + date + ': Duty Ops preassignment for ' + (person.name || personId) + ' conflicts with another fixed assignment');
       continue;
     }
-    applyFixed(person, date, { shift_code: dayCode }, 'Duty Ops preassignment');
+    applyFixed(person, date, { shift_code: dayCode, assignment_source: 'duty_ops' }, 'Duty Ops preassignment');
   }
 
   function coverageCount(day, shiftCode) {
@@ -286,7 +316,7 @@ export function generateSchedule({
       assignments[person.id][dateStr(month, day)] = state[person.id][day];
     }
   }
-  return { assignments, assignmentMeta, warnings, totals };
+  return { assignments, assignmentMeta, warnings, totals, fixedConflicts };
 }
 
 function variance(values) {

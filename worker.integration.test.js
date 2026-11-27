@@ -56,6 +56,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       mercy: 'local-mercy-enrollment-code',
       'mercy-dorice': 'local-mercy-dorice-enrollment-code',
       'clinton-juma': 'local-clinton-enrollment-code',
+      joan: 'local-joan-enrollment-code',
     };
     const enrollmentUpdates = Object.entries(enrollmentCodes).map(([id, code]) =>
       `UPDATE staff SET enrollment_hash = '${createHash('sha256').update(code).digest('hex')}' WHERE id = '${id}' AND pin_set = 0;`
@@ -91,6 +92,20 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const me = await fetch(baseUrl + '/api/auth/me', { headers: { cookie: sessionCookie } });
     assert.equal(me.status, 200);
     assert.equal((await me.json()).id, 'charles');
+
+    const concurrentEnrollments = await Promise.all([
+      fetch(baseUrl + '/api/auth/set-pin', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ staff_id: 'joan', pin: '725381', enrollment_code: enrollmentCodes.joan }),
+      }),
+      fetch(baseUrl + '/api/auth/set-pin', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ staff_id: 'joan', pin: '725382', enrollment_code: enrollmentCodes.joan }),
+      }),
+    ]);
+    assert.deepEqual(concurrentEnrollments.map(response => response.status).sort((a,b) => a-b), [201,409]);
+    assert.equal(concurrentEnrollments.filter(response => response.headers.get('set-cookie')).length, 1,
+      'a single-use enrollment code must create at most one authenticated session');
 
     const scopedStaff = await fetch(baseUrl + '/api/staff?department=ISOC', { headers: { cookie: sessionCookie } });
     assert.equal(scopedStaff.status, 200);
@@ -317,11 +332,17 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const reliefRequest = await requestRelief(hildaCookie, 'griffin', reliefDate, { target_department_id: 'ISOC', shift_code: 'D' });
     assert.equal(reliefRequest.status, 201, await reliefRequest.clone().text());
     const requested = await reliefRequest.json();
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "UPDATE workforce_relief_assignments SET status='approved',reviewed_by=requested_by,reviewed_at=CURRENT_TIMESTAMP WHERE id='" + requested.id + "';"
+    ], persistDir), /Relief approval requires a different reviewer/i);
     const selfApproval = await fetch(baseUrl + '/api/workforce/relief-assignments/' + requested.id, {
       method: 'PATCH', headers: { cookie: hildaCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'approved' }),
     });
     assert.equal(selfApproval.status, 403);
+    const pendingHomeRoster = await generateDepartment('SCE');
+    assert.equal(pendingHomeRoster.assignments.find(row => row.staff_id === 'griffin' && row.date === reliefDate)?.shift_code, 'O',
+      'a pending cross-team deployment must reserve the source employee’s home-roster date');
     const approval = await fetch(baseUrl + '/api/workforce/relief-assignments/' + requested.id, {
       method: 'PATCH', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'approved' }),
@@ -344,6 +365,11 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const clintonEmptyRoster = await fetch(baseUrl + '/api/workforce/my-roster?month=2026-12', { headers: { cookie: clintonCookie } });
     assert.equal(clintonEmptyRoster.status, 200);
     assert.deepEqual((await clintonEmptyRoster.json()).my_shifts, {});
+    const unassignedReliefOnlySchedule = await fetch(baseUrl + '/api/schedules/' + initialSce.id + '/mine', {
+      headers: { cookie: clintonCookie },
+    });
+    assert.equal(unassignedReliefOnlySchedule.status, 404,
+      'a relief-only qualification alone must not unlock another desk’s roster view');
     const clintonDate = [...new Set(isocWithGriffinRelief.assignments
       .filter(row => row.department_id === 'ISOC' && row.shift_code === 'D' && row.date !== reliefDate)
       .map(row => row.date))][0];
@@ -367,6 +393,15 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(fsaRow?.shift_code, 'FSA');
     assert.equal(fsaRow?.coverage_department_id, 'ISOC');
     assert.equal(fsaRow?.coverage_shift_code, 'D');
+    const lockedFsaEdit = await fetch(baseUrl + '/api/schedules/' + isocWithFsa.id + '/assignment', {
+      method: 'PATCH', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ staff_id: 'clinton-juma', date: clintonDate, shift_code: 'O' }),
+    });
+    assert.equal(lockedFsaEdit.status, 409, await lockedFsaEdit.clone().text());
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + isocWithFsa.id +
+      "' AND staff_id='clinton-juma' AND date='" + clintonDate + "';"
+    ], persistDir), /Locked workforce assignments cannot be edited/i);
     const clintonPersonal = await fetch(baseUrl + '/api/workforce/my-roster?month=2026-12', { headers: { cookie: clintonCookie } });
     assert.equal(clintonPersonal.status, 200);
     const clintonData = await clintonPersonal.json();
@@ -404,6 +439,9 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(clintonUpdatedData.my_shifts[sceNightDate], 'FSA');
     assert.equal(clintonUpdatedData.my_shift_details[sceNightDate].coverage_department_id, 'SCE');
     assert.equal(clintonUpdatedData.my_shift_details[sceNightDate].coverage_shift_code, 'NC');
+    const assignedSceMine = await fetch(baseUrl + '/api/schedules/' + sceWithFsa.id + '/mine', { headers: { cookie: clintonCookie } });
+    assert.equal(assignedSceMine.status, 200, await assignedSceMine.clone().text());
+    assert.equal((await assignedSceMine.json()).my_shifts[sceNightDate], 'FSA');
 
     // Mercy Wanyoike records typed leave and training for Mercy Dorice.
     const doriceCookie = await enrollAccount('mercy-dorice', '624814', enrollmentCodes['mercy-dorice']);
@@ -447,6 +485,15 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(doriceData.my_shifts[maternityDate], 'ML');
     assert.equal(doriceData.my_shifts[sickDate], 'SL');
     assert.equal(doriceData.my_shifts[trainingDate], 'T');
+
+    const doriceWorkDate = regeneratedIsoc.assignments.find(row =>
+      row.staff_id === 'mercy-dorice' && ['D','N'].includes(row.shift_code))?.date;
+    assert.ok(doriceWorkDate, 'fixture needs a scheduled Mercy Dorice work day for trigger-update regression');
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "INSERT INTO workforce_staff_markers (id,staff_id,date,marker_code,reason,status,created_by) VALUES " +
+      "('trigger-training-update','mercy-dorice','" + doriceWorkDate + "','T','Cancelled training row for update trigger test','cancelled','griffin'); " +
+      "UPDATE workforce_staff_markers SET status='approved' WHERE id='trigger-training-update';"
+    ], persistDir), /Training conflicts with an existing rostered assignment/i);
 
     const reliefLeaveConflict = await fetch(baseUrl + '/api/leave', {
       method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },

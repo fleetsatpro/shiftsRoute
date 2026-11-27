@@ -402,3 +402,212 @@ BEGIN
       )
   ) THEN RAISE(ABORT, 'Relief conflicts with an existing rostered assignment') END;
 END;
+
+
+-- The UPDATE path must enforce the same existing-roster guard as INSERT.
+CREATE TRIGGER IF NOT EXISTS trg_training_no_rostered_shift_update
+BEFORE UPDATE OF staff_id,date,status,marker_code ON workforce_staff_markers
+WHEN NEW.status='approved' AND NEW.marker_code='T'
+BEGIN
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM shift_assignments sa
+    JOIN schedules sc ON sc.id=sa.schedule_id
+    WHERE sa.staff_id=NEW.staff_id AND sa.date=NEW.date
+      AND sa.shift_code NOT IN ('O','L','PL','ML','SL')
+      AND sc.id=(
+        SELECT latest.id FROM schedules latest
+        WHERE latest.month=sc.month AND latest.department_id=sc.department_id
+        ORDER BY latest.generated_at DESC LIMIT 1
+      )
+  ) THEN RAISE(ABORT, 'Training conflicts with an existing rostered assignment') END;
+END;
+
+-- Independent review is enforced by D1 as well as the Worker route.
+CREATE TRIGGER IF NOT EXISTS trg_relief_requires_independent_reviewer_insert
+BEFORE INSERT ON workforce_relief_assignments
+WHEN NEW.status='approved'
+BEGIN
+  SELECT CASE WHEN NEW.reviewed_by IS NULL OR NEW.reviewed_by=NEW.requested_by
+    THEN RAISE(ABORT, 'Relief approval requires a different reviewer') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_relief_requires_independent_reviewer_update
+BEFORE UPDATE OF status,reviewed_by,requested_by ON workforce_relief_assignments
+WHEN NEW.status='approved'
+BEGIN
+  SELECT CASE WHEN NEW.reviewed_by IS NULL OR NEW.reviewed_by=NEW.requested_by
+    THEN RAISE(ABORT, 'Relief approval requires a different reviewer') END;
+END;
+
+-- Roster rows must represent approved source facts. This protects the D1
+-- boundary even when a write bypasses the Worker API.
+CREATE TRIGGER IF NOT EXISTS trg_shift_assignment_workforce_guard_insert
+BEFORE INSERT ON shift_assignments
+BEGIN
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC','T','FSA')
+    AND EXISTS (
+      SELECT 1 FROM leave_requests l
+      WHERE l.staff_id=NEW.staff_id AND l.date=NEW.date AND l.status='approved'
+    )
+    THEN RAISE(ABORT, 'Rostered work conflicts with approved leave') END;
+
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) AND NEW.shift_code<>'T'
+    THEN RAISE(ABORT, 'Rostered work conflicts with an approved trainee assignment') END;
+
+  SELECT CASE WHEN NEW.shift_code='T' AND NOT EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Trainee roster code requires an approved training marker') END;
+
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC','T','FSA') AND EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+      AND NOT (
+        NEW.coverage_department_id=r.target_department_id
+        AND NEW.coverage_shift_code=r.shift_code
+      )
+  ) THEN RAISE(ABORT, 'Rostered work conflicts with a pending or approved relief deployment') END;
+
+  SELECT CASE WHEN NEW.coverage_department_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code=NEW.shift_code AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Cross-desk roster metadata requires a matching approved relief allocation') END;
+
+  SELECT CASE WHEN NEW.shift_code='FSA' AND NEW.assignment_source<>'field_supervisor'
+    THEN RAISE(ABORT, 'FSA roster code is reserved for a Field Supervisor deployment') END;
+
+  SELECT CASE WHEN NEW.assignment_source='field_supervisor' AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code='FSA' AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Field Supervisor roster entry requires approved FSA relief') END;
+
+  SELECT CASE WHEN NEW.assignment_source='relief' AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code=NEW.shift_code AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Relief roster entry requires a matching approved deployment') END;
+
+  SELECT CASE WHEN NEW.assignment_source='training' AND NEW.shift_code<>'T'
+    THEN RAISE(ABORT, 'Training assignment source requires the T roster code') END;
+
+  SELECT CASE WHEN NEW.assignment_source='duty_ops' AND NOT EXISTS (
+    SELECT 1 FROM duty_ops_assignments doa
+    JOIN schedules sc ON sc.id=NEW.schedule_id
+    WHERE doa.manager_staff_id=NEW.staff_id AND doa.duty_date=NEW.date
+      AND doa.coverage_department_id=sc.department_id
+      AND doa.status IN ('assigned','confirmed')
+  ) THEN RAISE(ABORT, 'Duty Ops roster entry requires a named team-cover rota assignment') END;
+
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC') AND NEW.coverage_department_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules sc JOIN departments d ON d.id=sc.department_id
+      WHERE sc.id=NEW.schedule_id AND NEW.shift_code IN (d.day_code,d.night_code)
+    ) THEN RAISE(ABORT, 'Primary roster shift code does not match the receiving desk') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_shift_assignment_workforce_guard_update
+BEFORE UPDATE OF staff_id,date,shift_code,coverage_department_id,coverage_shift_code,assignment_source,schedule_id
+ON shift_assignments
+BEGIN
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC','T','FSA')
+    AND EXISTS (
+      SELECT 1 FROM leave_requests l
+      WHERE l.staff_id=NEW.staff_id AND l.date=NEW.date AND l.status='approved'
+    )
+    THEN RAISE(ABORT, 'Rostered work conflicts with approved leave') END;
+
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) AND NEW.shift_code<>'T'
+    THEN RAISE(ABORT, 'Rostered work conflicts with an approved trainee assignment') END;
+
+  SELECT CASE WHEN NEW.shift_code='T' AND NOT EXISTS (
+    SELECT 1 FROM workforce_staff_markers m
+    WHERE m.staff_id=NEW.staff_id AND m.date=NEW.date
+      AND m.marker_code='T' AND m.status='approved'
+  ) THEN RAISE(ABORT, 'Trainee roster code requires an approved training marker') END;
+
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC','T','FSA') AND EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.status IN ('pending','approved')
+      AND NOT (
+        NEW.coverage_department_id=r.target_department_id
+        AND NEW.coverage_shift_code=r.shift_code
+      )
+  ) THEN RAISE(ABORT, 'Rostered work conflicts with a pending or approved relief deployment') END;
+
+  SELECT CASE WHEN NEW.coverage_department_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code=NEW.shift_code AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Cross-desk roster metadata requires a matching approved relief allocation') END;
+
+  SELECT CASE WHEN NEW.shift_code='FSA' AND NEW.assignment_source<>'field_supervisor'
+    THEN RAISE(ABORT, 'FSA roster code is reserved for a Field Supervisor deployment') END;
+
+  SELECT CASE WHEN NEW.assignment_source='field_supervisor' AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code='FSA' AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Field Supervisor roster entry requires approved FSA relief') END;
+
+  SELECT CASE WHEN NEW.assignment_source='relief' AND NOT EXISTS (
+    SELECT 1 FROM workforce_relief_assignments r
+    WHERE r.staff_id=NEW.staff_id AND r.duty_date=NEW.date
+      AND r.target_department_id=NEW.coverage_department_id
+      AND r.shift_code=NEW.coverage_shift_code
+      AND r.display_code=NEW.shift_code AND r.status='approved'
+  ) THEN RAISE(ABORT, 'Relief roster entry requires a matching approved deployment') END;
+
+  SELECT CASE WHEN NEW.assignment_source='training' AND NEW.shift_code<>'T'
+    THEN RAISE(ABORT, 'Training assignment source requires the T roster code') END;
+
+  SELECT CASE WHEN NEW.assignment_source='duty_ops' AND NOT EXISTS (
+    SELECT 1 FROM duty_ops_assignments doa
+    JOIN schedules sc ON sc.id=NEW.schedule_id
+    WHERE doa.manager_staff_id=NEW.staff_id AND doa.duty_date=NEW.date
+      AND doa.coverage_department_id=sc.department_id
+      AND doa.status IN ('assigned','confirmed')
+  ) THEN RAISE(ABORT, 'Duty Ops roster entry requires a named team-cover rota assignment') END;
+
+  SELECT CASE WHEN NEW.shift_code IN ('D','N','DC','NC') AND NEW.coverage_department_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules sc JOIN departments d ON d.id=sc.department_id
+      WHERE sc.id=NEW.schedule_id AND NEW.shift_code IN (d.day_code,d.night_code)
+    ) THEN RAISE(ABORT, 'Primary roster shift code does not match the receiving desk') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_shift_assignment_locked_source_update
+BEFORE UPDATE OF shift_code,coverage_department_id,coverage_shift_code,assignment_source
+ON shift_assignments
+WHEN OLD.assignment_source IN ('rotation','training','relief','field_supervisor','duty_ops')
+  AND (
+    NEW.shift_code IS NOT OLD.shift_code
+    OR NEW.coverage_department_id IS NOT OLD.coverage_department_id
+    OR NEW.coverage_shift_code IS NOT OLD.coverage_shift_code
+    OR NEW.assignment_source IS NOT OLD.assignment_source
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Locked workforce assignments cannot be edited');
+END;
