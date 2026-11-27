@@ -1,6 +1,7 @@
 /* =========================================================
    ROC Shift Scheduler — Production Frontend
    ========================================================= */
+import { escHtml, safeShiftCode, safeStatus } from './ui-utils.js';
 const API = '/api';
 
 const DEPT_CODES = {
@@ -281,7 +282,6 @@ function applyStaffSearch() {
   });
 }
 
-import { escHtml, safeShiftCode, safeStatus } from './ui-utils.js';
 
 // ── Actions ───────────────────────────────────────────────
 async function generate() {
