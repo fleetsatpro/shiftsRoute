@@ -83,7 +83,12 @@ export default {
       }
 
       if (pathname === '/api/auth/set-pin' && request.method === 'POST') {
+        let enrollmentStage = 'parse_request';
+        let enrollmentStaffId = null;
+        try {
         const body = await request.json();
+        enrollmentStaffId = typeof body.staff_id === 'string' ? body.staff_id : null;
+        enrollmentStage = 'validate_and_lookup';
         const { staff_id, pin, enrollment_code } = body;
         if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
         if (typeof enrollment_code !== 'string' || enrollment_code.length < 16 || enrollment_code.length > 256) {
@@ -106,7 +111,9 @@ export default {
         if (!bootstrapAllowed && !issuedCodeAllowed) {
           return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         }
+        enrollmentStage = 'derive_pin_credential';
         const credential = await hashPin(pin);
+        enrollmentStage = 'persist_pin_and_bootstrap_latch';
         const statements = [
           env.DB.prepare(
             'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
@@ -118,10 +125,22 @@ export default {
           ).bind(new Date().toISOString()));
         }
         await env.DB.batch(statements);
+        enrollmentStage = 'verify_persisted_credential';
         const enrolled = await env.DB.prepare('SELECT pin_set FROM staff WHERE id = ?').bind(staff_id).first();
         if (!enrolled?.pin_set) return json({ error: 'Account enrollment could not be completed' }, { status: 409 });
+        enrollmentStage = 'create_authenticated_session';
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 201, headers: { 'Set-Cookie': setSessionCookie(token) } });
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: 'auth.enrollment.failed',
+            stage: enrollmentStage,
+            staff_id: enrollmentStaffId,
+            error_name: error instanceof Error ? error.name : 'UnknownError',
+            error_message: error instanceof Error ? error.message : String(error),
+          }));
+          return json({ error: 'Enrollment could not be completed. Please retry or contact Duty Ops.' }, { status: 503 });
+        }
       }
 
       if (pathname === '/api/auth/login' && request.method === 'POST') {
