@@ -191,3 +191,19 @@ CREATE TABLE IF NOT EXISTS workforce_audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_workforce_audit_created ON workforce_audit_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_workforce_audit_entity ON workforce_audit_events(entity_type, entity_id);
+
+CREATE TABLE IF NOT EXISTS workforce_shift_exceptions (
+  id TEXT PRIMARY KEY,
+  staff_id TEXT NOT NULL REFERENCES staff(id),
+  date TEXT NOT NULL,
+  shift_code TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  requested_by TEXT NOT NULL REFERENCES staff(id),
+  reviewed_by TEXT REFERENCES staff(id),
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(staff_id, date, shift_code)
+);
+CREATE INDEX IF NOT EXISTS idx_shift_exceptions_date_status
+  ON workforce_shift_exceptions(date, status);
