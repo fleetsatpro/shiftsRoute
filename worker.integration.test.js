@@ -48,11 +48,17 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
   try {
     // The preview config is deliberate: this test must never point at production D1.
     wrangler(['d1', 'migrations', 'apply', database, '--local'], persistDir);
-    const enrollmentHash = createHash('sha256').update(enrollmentCode).digest('hex');
-    wrangler([
-      'd1', 'execute', database, '--local', '--command',
-      `UPDATE staff SET enrollment_hash = '${enrollmentHash}' WHERE id = 'charles' AND pin_set = 0;`,
-    ], persistDir);
+    const enrollmentCodes = {
+      charles: enrollmentCode,
+      griffin: 'local-griffin-enrollment-code',
+      hilda: 'local-hilda-enrollment-code',
+      mukasa: 'local-mukasa-enrollment-code',
+      mercy: 'local-mercy-enrollment-code',
+    };
+    const enrollmentUpdates = Object.entries(enrollmentCodes).map(([id, code]) =>
+      `UPDATE staff SET enrollment_hash = '${createHash('sha256').update(code).digest('hex')}' WHERE id = '${id}' AND pin_set = 0;`
+    ).join(' ');
+    wrangler(['d1', 'execute', database, '--local', '--command', enrollmentUpdates], persistDir);
 
     worker = spawn('npx', [
       'wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', '8788',
@@ -88,12 +94,14 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(scopedStaff.status, 200);
     const staffRows = await scopedStaff.json();
     assert.ok(staffRows.length >= 10);
-    assert.ok(staffRows.every(person => person.department_id === 'ISOC'));
+    assert.ok(staffRows.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(staffRows.some(person => person.id === 'mukasa' && person.department_id === 'ROC'));
 
     const deniedCrossDepartment = await fetch(baseUrl + '/api/staff?department=SCE', { headers: { cookie: sessionCookie } });
     assert.equal(deniedCrossDepartment.status, 200);
     const ownScope = await deniedCrossDepartment.json();
-    assert.ok(ownScope.every(person => person.department_id === 'ISOC'));
+    assert.ok(ownScope.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(ownScope.some(person => person.id === 'mukasa'), 'cross-qualified Duty Ops Manager should be visible in ISOC roster');
 
     const badLogin = await fetch(baseUrl + '/api/auth/login', {
       method: 'POST',
@@ -117,6 +125,73 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(logout.status, 200);
     const afterLogout = await fetch(baseUrl + '/api/auth/me', { headers: { cookie: freshCookie } });
     assert.equal(afterLogout.status, 401);
+
+    async function enrollAccount(staff_id, pin, code) {
+      const response = await fetch(baseUrl + '/api/auth/set-pin', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ staff_id, pin, enrollment_code: code }),
+      });
+      assert.equal(response.status, 201, await response.clone().text());
+      return response.headers.get('set-cookie')?.split(';')[0];
+    }
+
+    const griffinCookie = await enrollAccount('griffin', '624810', enrollmentCodes.griffin);
+    const griffinProfileResponse = await fetch(baseUrl + '/api/auth/me', { headers: { cookie: griffinCookie } });
+    assert.equal(griffinProfileResponse.status, 200);
+    const griffinProfile = await griffinProfileResponse.json();
+    assert.equal(griffinProfile.role, 'admin');
+    assert.ok(griffinProfile.permissions.includes('system.configure'));
+    assert.equal(griffinProfile.authority_level, 1000);
+
+    const rotaGenerate = await fetch(baseUrl + '/api/workforce/duty-rota/generate', {
+      method: 'POST', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ month: '2026-12' }),
+    });
+    assert.equal(rotaGenerate.status, 200, await rotaGenerate.clone().text());
+    const rotaResult = await rotaGenerate.json();
+    assert.equal(rotaResult.assigned_days, 31);
+    assert.equal(rotaResult.uncovered_dates.length, 0);
+    const rotaResponse = await fetch(baseUrl + '/api/workforce/duty-rota?month=2026-12', { headers: { cookie: griffinCookie } });
+    assert.equal(rotaResponse.status, 200);
+    const rotaRows = await rotaResponse.json();
+    assert.equal(rotaRows.length, 31);
+    assert.ok(rotaRows.every(row => row.manager_staff_id && row.status === 'assigned'));
+    assert.ok(rotaRows.some(row => row.coverage_department_id === 'ISOC'));
+    assert.ok(rotaRows.some(row => row.coverage_department_id === 'SCE'));
+    for (const managerId of ['hilda','mukasa']) {
+      let streak = 0;
+      for (const row of rotaRows) {
+        if (row.manager_staff_id === managerId) streak++;
+        else streak = 0;
+        assert.ok(streak <= 5, managerId + ' exceeds the configured Duty Ops work streak');
+      }
+    }
+
+    const hildaCookie = await enrollAccount('hilda', '624811', enrollmentCodes.hilda);
+    const hildaProfile = await (await fetch(baseUrl + '/api/auth/me', { headers: { cookie: hildaCookie } })).json();
+    assert.equal(hildaProfile.role, 'duty_ops_manager');
+    assert.ok(hildaProfile.permissions.includes('system.configure'));
+    assert.ok(hildaProfile.permissions.includes('schedules.publish'));
+    assert.equal(hildaProfile.authority_level, 900);
+
+    const hildaOverview = await fetch(baseUrl + '/api/workforce/overview', { headers: { cookie: hildaCookie } });
+    assert.equal(hildaOverview.status, 200);
+    const protectedSuperior = await fetch(baseUrl + '/api/staff/griffin', {
+      method: 'PATCH', headers: { cookie: hildaCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Not Griffin' }),
+    });
+    assert.equal(protectedSuperior.status, 403);
+
+    const mercyCookie = await enrollAccount('mercy', '624812', enrollmentCodes.mercy);
+    const mercyProfile = await (await fetch(baseUrl + '/api/auth/me', { headers: { cookie: mercyCookie } })).json();
+    assert.equal(mercyProfile.role, 'hr');
+    const hrDirectory = await fetch(baseUrl + '/api/hr/staff', { headers: { cookie: mercyCookie } });
+    assert.equal(hrDirectory.status, 200);
+    const hrRosterAdmin = await fetch(baseUrl + '/api/schedules/generate', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ month: '2026-12', department_id: 'ISOC' }),
+    });
+    assert.equal(hrRosterAdmin.status, 403);
   } finally {
     if (worker) {
       // Wrangler's npx shim launches workerd/esbuild descendants. Kill the

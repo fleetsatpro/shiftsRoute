@@ -65,5 +65,6 @@ test('the ordered D1 migration chain is present and contiguous', () => {
     '0003_prod.sql',
     '0004_auth_hardening.sql',
     '0005_seed_patrick.sql',
+    '0006_workforce_operating_model.sql',
   ]);
 });

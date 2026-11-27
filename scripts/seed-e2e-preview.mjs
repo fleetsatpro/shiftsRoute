@@ -33,6 +33,11 @@ const values = demoStaff.map(person =>
 ).join(',\n');
 
 const sql = [
+  'DELETE FROM workforce_shift_exceptions;',
+  'DELETE FROM duty_ops_assignments;',
+  'DELETE FROM workforce_audit_events;',
+  'DELETE FROM staff_department_qualifications;',
+  'DELETE FROM staff_shift_policies;',
   'DELETE FROM swap_requests;',
   'DELETE FROM shift_assignments;',
   'DELETE FROM leave_requests;',
@@ -43,6 +48,8 @@ const sql = [
   'DELETE FROM staff;',
   'INSERT INTO staff (id, name, department_id, active, role, pin_hash, pin_salt, pin_set) VALUES',
   values + ';',
+  "INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) SELECT id, 'allowed', 5, 11, date('now') FROM staff;",
+  "INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approval_note) SELECT id, 'ISOC', 1, 1, 100, date('now'), 'Synthetic E2E qualification' FROM staff;",
 ].join('\n');
 
 const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';

@@ -180,8 +180,21 @@ async function startApp() {
   el('meRolePill').textContent = state.me.role;
   el('meRolePill').className = `role-pill ${state.me.role === 'staff' ? 'staff-role' : ''}`;
 
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
+  const isHr = state.me.role === 'hr';
   qsa('.admin-only').forEach(n => n.classList.toggle('hidden', !isAdmin));
+  qsa('.workforce-admin-only').forEach(n => n.classList.toggle('hidden', !isAdmin));
+  qsa('.workforce-hr-only').forEach(n => n.classList.toggle('hidden', !(isHr || isAdmin)));
+  if (isHr) {
+    qs('aside').classList.add('hidden');
+    qs('.mobile-nav').classList.add('hidden');
+    el('workspaceHero').classList.add('hidden');
+    qs('.controls-bar').classList.add('hidden');
+    qsa('.nav-btn').forEach(n => n.classList.toggle('hidden', n.dataset.tab !== 'hr'));
+    await loadHRWorkspace();
+    setTab('hr');
+    return;
+  }
 
   state.department = state.me.department_id;
   el('dept').value  = state.department;
@@ -197,7 +210,10 @@ async function startApp() {
   await loadLatest();
   setTab(isAdmin ? 'team' : 'mine');
   updateWorkspaceHero();
-  if (isAdmin) await loadStaffTable();
+  if (isAdmin) {
+    await loadStaffTable();
+    await loadDutyWorkspace().catch(err => toast('Duty Ops data unavailable: ' + err.message, 'warning'));
+  }
 }
 
 function updateDeptBadge() {
@@ -212,7 +228,7 @@ async function loadStaff() {
 }
 
 async function loadLeave() {
-  if (state.me.role !== 'admin') { state.leave = []; return; }
+  if (!['admin', 'duty_ops_manager'].includes(state.me.role)) { state.leave = []; return; }
   state.leave = await api(`/leave?month=${state.month}`);
   renderLeaveList();
 }
@@ -250,7 +266,7 @@ async function loadScheduleById(id) {
 }
 
 async function loadStaffTable() {
-  const rows = await api(`/staff?department=${state.department}`);
+  const rows = await api('/staff?all=1');
   const tbody = el('staffTableBody');
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-3);">No staff found.</td></tr>';
@@ -261,8 +277,12 @@ async function loadStaffTable() {
     const name = escHtml(s.name);
     const actions = [];
     if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="reset-pin" data-staff-id="${id}" data-staff-name="${name}">Reset PIN</button>`);
-    if (s.role === 'staff') actions.push(`<button type="button" class="ghost" data-action="make-admin" data-staff-id="${id}" data-staff-name="${name}">Make admin</button>`);
-    else if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
+    if (s.id !== state.me.id && (state.me.role === 'admin' || !['admin','duty_ops_manager'].includes(s.role))) {
+      const roleOptions = state.me.role === 'admin'
+        ? ['staff','technical_assistant','hr','duty_ops_manager','admin']
+        : ['staff','technical_assistant','hr'];
+      actions.push(`<select aria-label="Change role for ${name}" data-role-staff-id="${id}">${roleOptions.map(role => `<option value="${role}" ${role === s.role ? 'selected' : ''}>${role.replaceAll('_',' ')}</option>`).join('')}</select>`);
+    }
     if (s.id !== state.me.id) actions.push(`<button type="button" class="danger" data-action="deactivate" data-staff-id="${id}" data-staff-name="${name}">Deactivate</button>`);
     return `
       <tr data-search="${escHtml([s.name, s.department_id, s.role].join(" ").toLowerCase())}">
@@ -374,7 +394,7 @@ async function onDeptOrMonthChange() {
     await loadMyLeave();
     await loadLatest();
     await loadSwaps();
-    if (state.me.role === 'admin') await loadStaffTable();
+    if (['admin', 'duty_ops_manager'].includes(state.me.role)) await loadStaffTable();
   } catch (err) {
     toast('Could not refresh the selected month: ' + err.message, 'error', 5500);
   } finally {
@@ -402,6 +422,19 @@ async function resetPin(staffId, name) {
     toast(`PIN reset for ${name}; share the displayed one-time code securely.`, 'success', 5000);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function updateStaffRole(staffId, role) {
+  try {
+    await api('/staff/' + encodeURIComponent(staffId), {
+      method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role})
+    });
+    await loadStaffTable();
+    toast('Role updated and hierarchy enforced.', 'success');
+  } catch(err) {
+    await loadStaffTable();
+    toast(err.message, 'error');
   }
 }
 
@@ -533,6 +566,141 @@ async function cancelSwap(id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// ── Workforce workspaces ──────────────────────────────────
+async function loadHRWorkspace() {
+  const month = el('month')?.value || todayMonth();
+  const [staff, qualifications, leave, overview, policies] = await Promise.all([
+    api('/hr/staff'),
+    api('/workforce/qualifications'),
+    api('/leave?month=' + encodeURIComponent(month)),
+    api('/workforce/overview'),
+    api('/workforce/policies'),
+  ]);
+  state.hrStaff = staff;
+  state.hrQualifications = qualifications;
+  state.hrLeave = leave;
+  state.hrPolicies = policies;
+  el('hrActiveCount').textContent = staff.filter(person => person.active).length;
+  el('hrPendingCount').textContent = staff.filter(person => person.active && !person.pin_set).length;
+  el('hrQualificationCount').textContent = qualifications.filter(q => !q.effective_to).length;
+  el('hrStaffRows').innerHTML = staff.map(person => `
+    <tr><td>${escHtml(person.name)}</td><td>${escHtml(person.department_id)}</td>
+    <td>${escHtml(person.role)}</td><td>${person.pin_set ? 'Enrolled' : 'Pending'}</td>
+    <td>${person.active ? 'Active' : 'Inactive'}</td></tr>`).join('');
+  const operationalStaff = staff.filter(person => person.active && overview.departments.some(department => department.id === person.department_id));
+  const departmentOptions = overview.departments.map(department => `<option value="${escHtml(department.id)}">${escHtml(department.name)}</option>`).join('');
+  el('hrQualDept').innerHTML = departmentOptions;
+  el('hrNewDepartment').innerHTML = departmentOptions;
+  const select = el('hrQualStaff');
+  select.innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrPolicyStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrPolicyRows').innerHTML = policies.map(policy => `<div class="list-row"><strong>${escHtml(policy.staff_name)}</strong><span class="muted">${escHtml(policy.night_mode)} · max ${policy.max_consecutive_days} consecutive · rest ${policy.min_rest_hours}h</span></div>`).join('');
+  el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
+  el('hrQualificationRows').innerHTML = qualifications.map(q => `
+    <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_name)}
+    <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''} · from ${escHtml(q.effective_from)}${q.effective_to ? ' · to ' + escHtml(q.effective_to) : ' · current'}</span></div>`).join('') || '<p class="muted">No verified qualifications recorded.</p>';
+}
+
+async function addHrEmployee() {
+  const name = el('hrNewName').value.trim();
+  const department_id = el('hrNewDepartment').value;
+  if (name.length < 2) return toast('Enter the employee name.', 'warning');
+  try {
+    await api('/hr/staff', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,department_id}) });
+    closeModal('hrAddModal');
+    el('hrNewName').value = '';
+    await loadHRWorkspace();
+    toast('Employee record created. Add verified qualifications before scheduling.', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function saveHrQualification(event) {
+  event.preventDefault();
+  const payload = {
+    staff_id: el('hrQualStaff').value,
+    department_id: el('hrQualDept').value,
+    can_day: el('hrQualDay').checked ? 1 : 0,
+    can_night: el('hrQualNight').checked ? 1 : 0,
+    effective_from: el('hrQualFrom').value,
+    approval_note: el('hrQualNote').value.trim(),
+  };
+  try {
+    await api('/workforce/qualifications', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    el('hrQualNote').value = '';
+    await loadHRWorkspace();
+    toast('Qualification saved and audit recorded.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function loadDutyWorkspace() {
+  const overview = await api('/workforce/overview');
+  const month = el('month').value || todayMonth();
+  const [rota, exceptions] = await Promise.all([
+    api('/workforce/duty-rota?month=' + encodeURIComponent(month)),
+    api('/workforce/shift-exceptions?month=' + encodeURIComponent(month)),
+  ]);
+  const managers = overview.staff.filter(person => person.active && person.role === 'duty_ops_manager');
+  el('dutyManagerCount').textContent = managers.length;
+  el('dutyAssignedCount').textContent = rota.filter(item => item.manager_staff_id).length;
+  el('dutyExceptionCount').textContent = rota.filter(item => item.status === 'exception' || !item.manager_staff_id).length;
+  el('dutyRotaList').innerHTML = rota.map(item => `
+    <div class="list-row"><strong>${escHtml(item.duty_date)}</strong> · ${escHtml(item.manager_name || 'UNASSIGNED')}
+    <span class="muted">${escHtml(item.assignment_type)} · ${escHtml(item.status)}${item.reason ? ' · ' + escHtml(item.reason) : ''}</span></div>`).join('') || '<p class="muted">No rota generated for this month.</p>';
+  el('workforceCoverage').innerHTML = overview.qualifications.map(q => `
+    <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_id)}
+    <span class="muted">${q.can_day ? 'Day' : ''}${q.can_day && q.can_night ? ' + ' : ''}${q.can_night ? 'Night' : ''}</span></div>`).join('');
+  el('dutyExceptions').innerHTML = exceptions.map(item => `
+    <div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.date)} · ${escHtml(item.shift_code)}
+    <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
+    ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
+}
+
+async function saveHrPolicy(event) {
+  event.preventDefault();
+  const payload = {
+    staff_id: el('hrPolicyStaff').value,
+    night_mode: el('hrPolicyNight').value,
+    max_consecutive_days: Number(el('hrPolicyStreak').value),
+    min_rest_hours: Number(el('hrPolicyRest').value),
+  };
+  try {
+    await api('/workforce/policies', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Shift policy saved and audit recorded.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function saveHrLeave(event) {
+  event.preventDefault();
+  const payload = { staff_id: el('hrLeaveStaff').value, date: el('hrLeaveDate').value, status: el('hrLeaveStatus').value };
+  try {
+    await api('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Leave record saved.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function reviewShiftException(id, status) {
+  const action = status === 'approved' ? 'approve' : 'reject';
+  if (!confirm(`Are you sure you want to ${action} this emergency night-shift request?`)) return;
+  try {
+    await api('/workforce/shift-exceptions/' + encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+    await loadDutyWorkspace();
+    toast('Exception ' + status + '.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
+async function generateDutyWorkspaceRota() {
+  const month = el('month').value || todayMonth();
+  try {
+    const result = await api('/workforce/duty-rota/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({month})});
+    await loadDutyWorkspace();
+    if (result.uncovered_dates?.length) toast('Rota generated with ' + result.uncovered_dates.length + ' uncovered day(s). Review exceptions.', 'warning', 6000);
+    else toast('Fairness-balanced Duty Ops rotation generated.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
+}
+
 // ── Modal helpers ─────────────────────────────────────────
 let modalReturnFocus = null;
 function openModal(id) {
@@ -548,7 +716,10 @@ function closeModal(id) {
 
 // ── Tab navigation ────────────────────────────────────────
 function setTab(tab) {
-  if (['team', 'leave', 'staff'].includes(tab) && state.me?.role !== 'admin') return;
+  const adminRole = ['admin', 'duty_ops_manager'].includes(state.me?.role);
+  const hrRole = state.me?.role === 'hr';
+  if (['team', 'leave', 'staff', 'duty'].includes(tab) && !adminRole) return;
+  if (tab === 'hr' && !(adminRole || hrRole)) return;
   state.activeTab = tab;
   qsa('.tab-pane').forEach(p => p.classList.add('hidden'));
   const pane = el(`tab-${tab}`);
@@ -562,6 +733,8 @@ function setTab(tab) {
   // Lazy-load tab data and surface failures instead of silently leaving stale content.
   if (tab === 'swaps') loadSwaps().catch(err => toast('Could not load swap requests: ' + err.message, 'error'));
   if (tab === 'staff') loadStaffTable().catch(err => toast('Could not load staff: ' + err.message, 'error'));
+  if (tab === 'duty') loadDutyWorkspace().catch(err => toast('Could not load Duty Ops: ' + err.message, 'error'));
+  if (tab === 'hr') loadHRWorkspace().catch(err => toast('Could not load HR workspace: ' + err.message, 'error'));
 }
 
 function updateWorkspaceHero() {
@@ -580,7 +753,7 @@ function updateWorkspaceHero() {
   el('heroScheduleDetail').textContent = state.schedule
     ? `${rostered.toLocaleString()} people represented · ${assignments.length.toLocaleString()} recorded assignments`
     : `No schedule loaded for ${state.month || 'this period'}`;
-  el('heroDescription').textContent = state.me.role === 'admin'
+  el('heroDescription').textContent = ['admin', 'duty_ops_manager'].includes(state.me.role)
     ? 'Coordinate staffing, coverage and operational readiness across your desk.'
     : 'Your shifts, leave and team coordination — clearly organised in one place.';
   root.dataset.scheduleState = status || 'empty';
@@ -686,7 +859,7 @@ function renderSwaps() {
       </div>`;
     return;
   }
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
   container.innerHTML = state.swaps.map(s => {
     const isMine = s.from_staff_id === state.me.id;
     const id = escHtml(s.id);
@@ -778,7 +951,7 @@ function renderGrid() {
   const month   = state.schedule.month;
   const nDays   = daysInMonth(month);
   const codes   = DEPT_CODES[state.department];
-  const isAdmin = state.me.role === 'admin';
+  const isAdmin = ['admin', 'duty_ops_manager'].includes(state.me.role);
 
   // Filter to this department's assignments
   // Staff IDs are external data; use a null-prototype map so values such as
@@ -1020,6 +1193,10 @@ function init() {
   el('addLeaveBtn').addEventListener('click', addLeave);
 
   // Delegated actions: no user-controlled values are interpolated into executable HTML.
+  el('staffTableBody').addEventListener('change', e => {
+    const select = e.target.closest('[data-role-staff-id]');
+    if (select) updateStaffRole(select.dataset.roleStaffId, select.value);
+  });
   el('staffTableBody').addEventListener('click', e => {
     const button = e.target.closest('[data-action]');
     if (!button) return;
@@ -1046,6 +1223,20 @@ function init() {
     const button = e.target.closest('[data-action="remove-leave"]');
     if (button) removeLeave(button.dataset.leaveId);
   });
+
+  // HR and Duty Ops workspaces.
+  el('hrAddEmployee').addEventListener('click', () => openModal('hrAddModal'));
+  el('hrCancelAdd').addEventListener('click', () => closeModal('hrAddModal'));
+  el('hrConfirmAdd').addEventListener('click', addHrEmployee);
+  el('hrAddModal').addEventListener('click', e => { if (e.target === el('hrAddModal')) closeModal('hrAddModal'); });
+  el('hrQualificationForm').addEventListener('submit', saveHrQualification);
+  el('hrPolicyForm').addEventListener('submit', saveHrPolicy);
+  el('hrLeaveForm').addEventListener('submit', saveHrLeave);
+  el('dutyExceptions').addEventListener('click', event => {
+    const button = event.target.closest('[data-exception-action]');
+    if (button) reviewShiftException(button.dataset.exceptionId, button.dataset.exceptionAction);
+  });
+  el('generateDutyRota').addEventListener('click', generateDutyWorkspaceRota);
 
   // Staff directory search filters the currently loaded department roster.
   el('staffSearch').addEventListener('input', applyStaffSearch);

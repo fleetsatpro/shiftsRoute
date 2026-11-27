@@ -44,7 +44,7 @@ export function isWeekend(yyyymm, day) {
  *        to the department's actual shift code.
  * @returns {{ assignments, warnings, totals }}
  */
-export function generateSchedule({ month, department, staff, leaveByStaff, priorFinalState }) {
+export function generateSchedule({ month, department, staff, leaveByStaff, priorFinalState, preassignedAssignments = {} }) {
   const nDays    = daysInMonth(month);
   const dayCode   = department.day_code;
   const nightCode = department.night_code;
@@ -105,9 +105,24 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
     if (nightRestRule && shiftCode === dayCode && prevCode === nightCode) return false;
 
     // Rule: max 5 consecutive working days
-    if (consecutiveWork >= 5) return false;
+    if (consecutiveWork >= (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
 
     return true;
+  }
+
+  const lockedAssignments = new Set();
+  for (const [date, staffId] of Object.entries(preassignedAssignments || {})) {
+    const day = Number(date.slice(-2));
+    const person = staff.find(item => item.id === staffId);
+    if (!person || !Number.isInteger(day) || day < 1 || day > nDays) continue;
+    if (!canAssign(staffId, day, dayCode)) {
+      warnings.push(`${department.id} ${date}: Duty Ops preassignment for ${person.name || staffId} conflicts with availability/rest/qualification`);
+      continue;
+    }
+    state[staffId][day] = dayCode;
+    totals[staffId].total++;
+    if (isWeekend(month, day)) totals[staffId].weekend++;
+    lockedAssignments.add(staffId + ':' + date);
   }
 
   function fairnessScore(staffId, shiftCode, day) {
@@ -125,7 +140,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
       const min = isNight ? department.night_min : department.day_min;
 
       const candidates = staff
-        .filter(s => canAssign(s.id, day, shiftCode))
+        .filter(s => (isNight ? (s.can_night !== 0 || s.night_exception_dates?.includes(dateStr(month, day))) : s.can_day !== 0) && canAssign(s.id, day, shiftCode))
         .sort((a, b) => fairnessScore(a.id, shiftCode, day) - fairnessScore(b.id, shiftCode, day));
 
       if (candidates.length < min) {
@@ -135,7 +150,8 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
       }
 
       const max = isNight ? (department.night_max ?? min) : (department.day_max ?? min);
-      const needed = Math.min(max, candidates.length);
+      const alreadyAssigned = staff.filter(person => state[person.id][day] === shiftCode).length;
+      const needed = Math.min(Math.max(0, max - alreadyAssigned), candidates.length);
       for (let i = 0; i < needed; i++) {
         const s = candidates[i];
         state[s.id][day] = shiftCode;
@@ -152,7 +168,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
   }
 
   // Local-search improvement pass
-  improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState });
+  improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState, lockedAssignments });
 
   const assignments = {};
   for (const s of staff) {
@@ -171,7 +187,7 @@ function variance(values) {
   return values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
 }
 
-function improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState }) {
+function improveBalance({ state, staff, totals, month, nDays, department, dayCode, nightCode, priorFinalState, lockedAssignments = new Set() }) {
   const ITERATIONS = 600;
   const ids = staff.map(s => s.id);
 
@@ -189,7 +205,7 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
         if (d === run && (priorFinalState?.[staffId]?.lastShift === 'day' || priorFinalState?.[staffId]?.lastShift === 'night')) {
           run += priorFinalState[staffId].consecutiveWork ?? 0;
         }
-        if (run > 5) return false;
+        if (run > (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
       }
     }
     return true;
@@ -229,8 +245,13 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
 
     const busyCode = state[busy][day];
     const freeCode = state[free][day];
+    const date = dateStr(month, day);
+    if (lockedAssignments.has(busy + ':' + date) || lockedAssignments.has(free + ':' + date)) continue;
 
     if ((busyCode !== dayCode && busyCode !== nightCode) || freeCode !== OFF) continue;
+    const freePerson = staff.find(person => person.id === free);
+    if (busyCode === dayCode && freePerson?.can_day === 0) continue;
+    if (busyCode === nightCode && freePerson?.can_night === 0 && !freePerson?.night_exception_dates?.includes(dateStr(month, day))) continue;
 
     // Attempt swap
     state[busy][day] = OFF;

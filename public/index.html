@@ -22,15 +22,15 @@
     --text:       #e4e8f0;
     --text-2:     #9aa3b5;
     --text-3:     #5c677d;
-    --accent:     #4fd1c5;
-    --accent-dim: #1d5f5a;
-    --accent-glow:rgba(79,209,197,.12);
+    --accent:     #7c8cff;
+    --accent-dim: #34418c;
+    --accent-glow:rgba(124,140,255,.14);
     --amber:      #f6ad55;
     --amber-dim:  #7a4a1a;
     --red:        #fc8181;
     --red-dim:    #7b2727;
-    --green:      #68d391;
-    --green-dim:  #1e5434;
+    --green:      #62b6ff;
+    --green-dim:  #214b78;
     --blue:       #63b3ed;
 
     --c-day:    #2a5298;
@@ -224,8 +224,8 @@
   }
   button:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
-  button.primary { background: var(--accent-dim); border-color: var(--accent); color: #c6fff9; }
-  button.primary:hover:not(:disabled) { background: var(--accent); color: #07201e; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); color: #dce4ff; }
+  button.primary:hover:not(:disabled) { background: var(--accent); color: #0b1020; }
   button.danger { background: var(--red-dim); border-color: var(--red); color: #ffd8d8; }
   button.danger:hover:not(:disabled) { background: var(--red); color: #1a0a0a; }
   button.ghost { background: transparent; border-color: transparent; color: var(--text-3); }
@@ -281,7 +281,7 @@
     border: 1px solid var(--border-2);
     color: var(--text-3);
   }
-  .status-pill.published { color: var(--green); border-color: var(--green-dim); background: rgba(104,211,145,.07); }
+  .status-pill.published { color: var(--green); border-color: var(--green-dim); background: rgba(98,182,255,.08); }
   .status-pill.draft { color: var(--amber); border-color: var(--amber-dim); background: rgba(246,173,85,.07); }
 
   /* ── Schedule grid ───────────────────────────────────────── */
@@ -551,7 +551,7 @@
     flex-shrink: 0;
   }
   .swap-status.pending  { background: rgba(246,173,85,.12); color: var(--amber); border: 1px solid var(--amber-dim); }
-  .swap-status.approved { background: rgba(104,211,145,.1); color: var(--green); border: 1px solid var(--green-dim); }
+  .swap-status.approved { background: rgba(98,182,255,.12); color: var(--green); border: 1px solid var(--green-dim); }
   .swap-status.rejected { background: rgba(252,129,129,.1); color: var(--red);   border: 1px solid var(--red-dim); }
   .swap-row .swap-detail { flex: 1; color: var(--text-2); }
   .swap-row .swap-detail b { color: var(--text); }
@@ -662,7 +662,7 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: radial-gradient(ellipse at 50% 0%, rgba(79,209,197,.06) 0%, transparent 70%),
+    background: radial-gradient(ellipse at 50% 0%, rgba(124,140,255,.07) 0%, transparent 70%),
                 var(--bg);
   }
   .login-card {
@@ -733,7 +733,7 @@
     font-weight: 600;
     line-height: 1.4;
   }
-  .cov-count.ok   { background: rgba(104,211,145,.15); color: var(--green); }
+  .cov-count.ok   { background: rgba(98,182,255,.16); color: var(--green); }
   .cov-count.warn { background: rgba(252,129,129,.15); color: var(--red); }
 
   /* ── Responsive ──────────────────────────────────────────── */
@@ -747,16 +747,16 @@
   }
   /* ── Responsive navigation and accessibility refinements ── */
   :root {
-    --accent: #62e6d5;
-    --accent-dim: #176b67;
-    --accent-glow: rgba(98,230,213,.14);
+    --accent: #8d9bff;
+    --accent-dim: #39468f;
+    --accent-glow: rgba(141,155,255,.16);
     --panel-glass: rgba(21,26,36,.88);
     --shadow-card: 0 2px 8px rgba(0,0,0,.24), 0 14px 36px rgba(0,0,0,.2);
   }
   body {
     background:
       radial-gradient(900px 500px at 78% -10%, rgba(59,130,246,.10), transparent 65%),
-      radial-gradient(700px 480px at -15% 38%, rgba(98,230,213,.07), transparent 62%),
+      radial-gradient(700px 480px at -15% 38%, rgba(124,140,255,.08), transparent 62%),
       var(--bg);
   }
   header {
@@ -769,7 +769,7 @@
     border-color: rgba(105,126,158,.24);
     box-shadow: var(--shadow-card);
   }
-  .panel-header { background: linear-gradient(90deg, rgba(98,230,213,.035), transparent 65%); }
+  .panel-header { background: linear-gradient(90deg, rgba(124,140,255,.045), transparent 65%); }
   button, select, input { min-height: 38px; }
   button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
     outline: 2px solid var(--accent);
@@ -778,7 +778,7 @@
   .skip-link {
     position: fixed; top: 8px; left: 8px; z-index: 2000;
     transform: translateY(-160%); padding: 10px 14px;
-    border-radius: 8px; background: var(--accent); color: #071c1b;
+    border-radius: 8px; background: var(--accent); color: #0b1020;
     font-weight: 700; text-decoration: none;
   }
   .skip-link:focus { transform: translateY(0); }
@@ -803,8 +803,8 @@
     border-radius: 8px; white-space: nowrap;
   }
   .mobile-nav .nav-btn.active {
-    border: 1px solid rgba(98,230,213,.3);
-    background: rgba(98,230,213,.10);
+    border: 1px solid rgba(124,140,255,.34);
+    background: rgba(124,140,255,.12);
   }
   .staff-actions, .swap-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .staff-actions button, .swap-actions button {
@@ -915,9 +915,9 @@
     --text: #edf4ff;
     --text-2: #aabbd5;
     --text-3: #7185a5;
-    --accent: #65e6d0;
-    --accent-dim: #145d5b;
-    --accent-glow: rgba(101,230,208,.14);
+    --accent: #b7a2ff;
+    --accent-dim: #493b79;
+    --accent-glow: rgba(183,162,255,.16);
     --blue: #7db9ff;
     --shadow-card: 0 16px 42px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.045);
     --radius: 10px;
@@ -1073,6 +1073,10 @@
       <button class="nav-btn admin-only hidden" data-tab="team">Team Grid</button>
       <button class="nav-btn admin-only hidden" data-tab="leave">Leave Manager</button>
       <button class="nav-btn admin-only hidden" data-tab="staff">Staff Manager</button>
+    <button class="nav-btn workforce-admin-only hidden" data-tab="duty">Duty Ops Command</button>
+    <button class="nav-btn workforce-hr-only hidden" data-tab="hr">Human Resources</button>
+      <button class="nav-btn workforce-admin-only hidden" data-tab="duty">Duty Ops Command</button>
+      <button class="nav-btn workforce-hr-only hidden" data-tab="hr">Human Resources</button>
     </aside>
 
     <nav class="mobile-nav" aria-label="Primary navigation">
@@ -1082,6 +1086,8 @@
       <button class="nav-btn admin-only hidden" data-tab="team">Team Grid</button>
       <button class="nav-btn admin-only hidden" data-tab="leave">Leave Manager</button>
       <button class="nav-btn admin-only hidden" data-tab="staff">Staff Manager</button>
+      <button class="nav-btn workforce-admin-only hidden" data-tab="duty">Duty Ops Command</button>
+      <button class="nav-btn workforce-hr-only hidden" data-tab="hr">Human Resources</button>
     </nav>
 
     <main id="mainContent" tabindex="-1">
@@ -1263,6 +1269,77 @@
         </div>
       </div>
 
+      <!-- DUTY OPS COMMAND workspace -->
+      <section id="tab-duty" class="tab-pane hidden">
+        <div class="page-title"><h1>Duty Ops Command</h1><span class="page-sub">Daily leadership rota · cross-team coverage · operational exceptions</span></div>
+        <div class="metrics-grid">
+          <article class="metric-card"><span class="metric-label">Duty managers</span><strong id="dutyManagerCount">—</strong><span class="metric-note">Active senior operations managers</span></article>
+          <article class="metric-card"><span class="metric-label">Assigned days</span><strong id="dutyAssignedCount">—</strong><span class="metric-note">For the selected month</span></article>
+          <article class="metric-card"><span class="metric-label">Uncovered days</span><strong id="dutyExceptionCount">—</strong><span class="metric-note">Require manual resolution</span></article>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Daily Duty Manager Rotation</h2><div class="panel-actions"><button id="generateDutyRota" class="primary">Generate fair rotation</button></div></div>
+          <div id="dutyRotaList" class="leave-list"><p class="muted">Generate or load the daily rota for the selected month.</p></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Workforce eligibility and coverage</h2></div>
+          <div id="workforceCoverage" class="staff-table-wrap"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Emergency night-shift exceptions</h2><span class="muted">Independent approval required</span></div>
+          <div id="dutyExceptions" class="leave-list"><p class="muted">No exceptions loaded.</p></div>
+        </div>
+      </section>
+
+      <!-- HR workspace -->
+      <section id="tab-hr" class="tab-pane hidden">
+        <div class="page-title"><h1>Human Resources</h1><span class="page-sub">People lifecycle · qualifications · availability · controlled onboarding</span></div>
+        <div class="metrics-grid">
+          <article class="metric-card"><span class="metric-label">Active workforce</span><strong id="hrActiveCount">—</strong><span class="metric-note">Across operational teams</span></article>
+          <article class="metric-card"><span class="metric-label">Awaiting enrollment</span><strong id="hrPendingCount">—</strong><span class="metric-note">PIN not yet configured</span></article>
+          <article class="metric-card"><span class="metric-label">Qualification records</span><strong id="hrQualificationCount">—</strong><span class="metric-note">Effective-dated eligibility</span></article>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Employee records</h2><div class="panel-actions"><button id="hrAddEmployee" class="primary">Add employee</button></div></div>
+          <div style="overflow-x:auto"><table class="staff-table"><thead><tr><th>Name</th><th>Home team</th><th>Role</th><th>Account</th><th>Status</th></tr></thead><tbody id="hrStaffRows"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Department qualifications</h2></div>
+          <form id="hrQualificationForm" class="leave-form">
+            <label class="ctrl-label" for="hrQualStaff">Employee</label><select id="hrQualStaff" required></select>
+            <label class="ctrl-label" for="hrQualDept">Qualified team</label><select id="hrQualDept" required><option value="ISOC">ISOC</option><option value="SCE">SCE / SCM</option></select>
+            <label><input id="hrQualDay" type="checkbox" checked /> Day shift</label>
+            <label><input id="hrQualNight" type="checkbox" /> Night shift</label>
+            <label class="ctrl-label" for="hrQualFrom">Effective from</label><input id="hrQualFrom" type="date" required />
+            <label class="ctrl-label" for="hrQualNote">Approval / training reference</label><input id="hrQualNote" maxlength="500" placeholder="Training record or approval note" />
+            <button class="primary" type="submit">Save qualification</button>
+          </form>
+          <div id="hrQualificationRows" class="leave-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Individual shift policies</h2><span class="muted">Eligibility and work limits</span></div>
+          <form id="hrPolicyForm" class="leave-form">
+            <label class="ctrl-label" for="hrPolicyStaff">Employee</label><select id="hrPolicyStaff" required></select>
+            <label class="ctrl-label" for="hrPolicyNight">Night work policy</label><select id="hrPolicyNight"><option value="allowed">Allowed</option><option value="restricted">Restricted</option><option value="exception_only">Emergency exception only</option><option value="prohibited">Prohibited</option></select>
+            <label class="ctrl-label" for="hrPolicyStreak">Maximum consecutive work days</label><input id="hrPolicyStreak" type="number" min="1" max="7" value="5" required />
+            <label class="ctrl-label" for="hrPolicyRest">Minimum rest target (hours)</label><input id="hrPolicyRest" type="number" min="8" max="24" value="11" required />
+            <p class="muted">Rest-hour targets are stored for policy configuration. Exact hour-based enforcement requires configured shift start/end times; current solver enforces night-to-day recovery and consecutive-work limits.</p>
+            <button class="primary" type="submit">Save shift policy</button>
+          </form>
+          <div id="hrPolicyRows" class="leave-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Leave and absence</h2></div>
+          <form id="hrLeaveForm" class="leave-form">
+            <label class="ctrl-label" for="hrLeaveStaff">Employee</label><select id="hrLeaveStaff" required></select>
+            <label class="ctrl-label" for="hrLeaveDate">Date</label><input id="hrLeaveDate" type="date" required />
+            <label class="ctrl-label" for="hrLeaveStatus">Status</label><select id="hrLeaveStatus"><option value="approved">Approved</option><option value="pending">Pending</option></select>
+            <button class="primary" type="submit">Record leave</button>
+          </form>
+          <div id="hrLeaveRows" class="leave-list"></div>
+        </div>
+      </section>
+
       <!-- STAFF MANAGER tab (admin) -->
       <div id="tab-staff" class="tab-pane hidden">
         <div class="page-title">
@@ -1291,6 +1368,17 @@
   </div>
 </div>
 
+<!-- HR add employee modal -->
+<div id="hrAddModal" class="modal-backdrop hidden">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="hrAddTitle">
+    <h3 id="hrAddTitle">Onboard employee</h3>
+    <label for="hrNewName">Full name</label><input id="hrNewName" maxlength="120" required />
+    <label for="hrNewDepartment">Home team</label><select id="hrNewDepartment"><option value="ISOC">ISOC</option><option value="SCE">SCE / SCM</option></select>
+    <p class="muted">New employees are not schedulable until HR records their verified department and shift qualifications.</p>
+    <div class="modal-actions"><button id="hrCancelAdd" class="ghost" type="button">Cancel</button><button id="hrConfirmAdd" class="primary" type="button">Create employee record</button></div>
+  </div>
+</div>
+
 <!-- Add Staff modal -->
 <div id="addStaffModal" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addStaffTitle">
@@ -1304,8 +1392,11 @@
     </select>
     <label for="newStaffRole">Role</label>
     <select id="newStaffRole">
-      <option value="staff">Staff</option>
-      <option value="admin">Admin (Scheduler)</option>
+      <option value="staff">Controller / Staff</option>
+      <option value="technical_assistant">Technical Assistant</option>
+      <option value="hr">Human Resources</option>
+      <option value="duty_ops_manager">Duty Ops Manager</option>
+      <option value="admin">Platform Administrator</option>
     </select>
     <div class="modal-actions">
       <button id="cancelAddStaff" class="ghost">Cancel</button>
@@ -1353,3 +1444,16 @@
 <script type="module" src="/app.js"></script>
 </body>
 </html>
+
+<style>
+/* Workforce workspaces: sapphire/violet command surfaces; no green or teal accents. */
+#tab-duty .panel, #tab-hr .panel { background:linear-gradient(145deg,rgba(22,30,49,.94),rgba(13,19,33,.96)); border-color:rgba(124,140,255,.24); }
+#tab-duty .metrics-grid, #tab-hr .metrics-grid { margin-bottom:18px; }
+#tab-duty .list-row, #tab-hr .list-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border); }
+#tab-duty .list-row strong, #tab-hr .list-row strong { color:var(--text); min-width:110px; }
+#tab-duty .muted, #tab-hr .muted { color:var(--text-2); }
+#tab-hr form.leave-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; align-items:end; }
+#tab-hr form.leave-form label { color:var(--text-2); }
+#tab-hr form.leave-form input, #tab-hr form.leave-form select { min-width:0; }
+@media(max-width:700px) { #tab-hr form.leave-form { grid-template-columns:1fr 1fr; } }
+</style>

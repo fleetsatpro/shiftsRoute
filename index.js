@@ -83,7 +83,12 @@ export default {
       }
 
       if (pathname === '/api/auth/set-pin' && request.method === 'POST') {
+        let enrollmentStage = 'parse_request';
+        let enrollmentStaffId = null;
+        try {
         const body = await request.json();
+        enrollmentStaffId = typeof body.staff_id === 'string' ? body.staff_id : null;
+        enrollmentStage = 'validate_and_lookup';
         const { staff_id, pin, enrollment_code } = body;
         if (!isValidPin(pin)) return json({ error: 'PIN must be exactly 6 digits' }, { status: 400 });
         if (typeof enrollment_code !== 'string' || enrollment_code.length < 16 || enrollment_code.length > 256) {
@@ -106,7 +111,9 @@ export default {
         if (!bootstrapAllowed && !issuedCodeAllowed) {
           return json({ error: 'Enrollment could not be verified' }, { status: 403 });
         }
+        enrollmentStage = 'derive_pin_credential';
         const credential = await hashPin(pin);
+        enrollmentStage = 'persist_pin_and_bootstrap_latch';
         const statements = [
           env.DB.prepare(
             'UPDATE staff SET pin_hash = ?, pin_salt = ?, pin_set = 1, enrollment_hash = NULL WHERE id = ? AND pin_set = 0'
@@ -118,10 +125,22 @@ export default {
           ).bind(new Date().toISOString()));
         }
         await env.DB.batch(statements);
+        enrollmentStage = 'verify_persisted_credential';
         const enrolled = await env.DB.prepare('SELECT pin_set FROM staff WHERE id = ?').bind(staff_id).first();
         if (!enrolled?.pin_set) return json({ error: 'Account enrollment could not be completed' }, { status: 409 });
+        enrollmentStage = 'create_authenticated_session';
         const token = await createSession(env.DB, staff_id);
         return json({ ok: true }, { status: 201, headers: { 'Set-Cookie': setSessionCookie(token) } });
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: 'auth.enrollment.failed',
+            stage: enrollmentStage,
+            staff_id: enrollmentStaffId,
+            error_name: error instanceof Error ? error.name : 'UnknownError',
+            error_message: error instanceof Error ? error.message : String(error),
+          }));
+          return json({ error: 'Enrollment could not be completed. Please retry or contact Duty Ops.' }, { status: 503 });
+        }
       }
 
       if (pathname === '/api/auth/login' && request.method === 'POST') {
@@ -174,14 +193,29 @@ export default {
 
       if (pathname === '/api/auth/me' && request.method === 'GET') {
         if (!me) return json({ error: 'Not signed in' }, { status: 401 });
-        return json(me);
+        const { results: mePermissions } = await env.DB.prepare('SELECT permission FROM role_permissions WHERE role = ?').bind(me.role).all();
+        const authority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+        return json({ ...me, permissions: mePermissions.map(row => row.permission), authority_level: authority?.authority_level ?? 0 });
       }
 
       if (!me) return json({ error: 'Sign in required' }, { status: 401 });
 
-      const isAdmin = me.role === 'admin';
+      const { results: permissionRows } = await env.DB.prepare(
+        'SELECT permission FROM role_permissions WHERE role = ?'
+      ).bind(me.role).all();
+      const permissions = new Set(permissionRows.map(row => row.permission));
+      const isAdmin = permissions.has('system.configure') && permissions.has('staff.manage');
+      const isDutyOpsManager = me.role === 'duty_ops_manager';
+      const isHr = permissions.has('staff.lifecycle');
+      const canManageLeave = permissions.has('leave.manage');
       function requireAdmin() {
-        if (!isAdmin) return json({ error: 'Admin access required' }, { status: 403 });
+        if (!isAdmin) return json({ error: 'Administrative permission required' }, { status: 403 });
+        return null;
+      }
+      function requireAnyPermission(...required) {
+        if (!required.some(permission => permissions.has(permission))) {
+          return json({ error: 'Insufficient permission' }, { status: 403 });
+        }
         return null;
       }
 
@@ -191,8 +225,11 @@ export default {
         if (denied) return denied;
         const body = await request.json();
         const { staff_id } = body;
-        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(staff_id).first();
+        const target = await env.DB.prepare('SELECT id, active, role FROM staff WHERE id = ?').bind(staff_id).first();
         if (!target?.active) return json({ error: 'Active staff account not found' }, { status: 404 });
+        const targetAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+        const actorAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+        if (me.role !== 'admin' && (targetAuthority?.authority_level ?? 0) >= (actorAuthority?.authority_level ?? 0)) return json({ error: 'You cannot reset credentials at or above your authority level' }, { status: 403 });
         const enrollmentCode = [...crypto.getRandomValues(new Uint8Array(24))]
           .map((b) => b.toString(16).padStart(2, '0')).join('');
         await env.DB.batch([
@@ -209,14 +246,320 @@ export default {
         return json(results);
       }
 
+      // ── Workforce administration: HR and Duty Ops workspaces ────────
+      if (pathname === '/api/workforce/overview' && request.method === 'GET') {
+        const denied = requireAnyPermission('staff.read', 'coverage.read');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY department_id, name'
+        ).all();
+        const { results: departments } = await env.DB.prepare(
+          'SELECT id, name, day_min, day_max, night_min, night_max, day_code, night_code FROM departments WHERE operational_team = 1 ORDER BY id'
+        ).all();
+        const { results: qualifications } = await env.DB.prepare(
+          'SELECT q.staff_id, q.department_id, q.can_day, q.can_night, q.priority, q.effective_from, q.effective_to, s.name AS staff_name FROM staff_department_qualifications q JOIN staff s ON s.id = q.staff_id WHERE q.effective_to IS NULL ORDER BY s.name, q.department_id'
+        ).all();
+        return json({ staff: results, departments, qualifications, role: me.role, authority_level: (await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first())?.authority_level ?? 0 });
+      }
+
+      if (pathname === '/api/workforce/policies' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT p.*, s.name AS staff_name FROM staff_shift_policies p JOIN staff s ON s.id=p.staff_id ORDER BY s.name'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/policies' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || !['allowed','restricted','exception_only','prohibited'].includes(body.night_mode)
+          || !Number.isInteger(body.max_consecutive_days) || body.max_consecutive_days < 1 || body.max_consecutive_days > 7
+          || !Number.isInteger(body.min_rest_hours) || body.min_rest_hours < 8 || body.min_rest_hours > 24) {
+          return json({ error: 'Invalid shift policy values' }, { status: 400 });
+        }
+        const target = await env.DB.prepare('SELECT id, active, role FROM staff WHERE id = ?').bind(body.staff_id).first();
+        if (!target?.active) return json({ error: 'Active employee not found' }, { status: 404 });
+        if (target.role === 'technical_assistant' && body.night_mode === 'allowed') return json({ error: 'Technical Assistant night work must remain emergency-exception-only' }, { status: 409 });
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from, updated_by, updated_at) VALUES (?, ?, ?, ?, date('now'), ?, ?) ON CONFLICT(staff_id) DO UPDATE SET night_mode=excluded.night_mode, max_consecutive_days=excluded.max_consecutive_days, min_rest_hours=excluded.min_rest_hours, effective_from=excluded.effective_from, updated_by=excluded.updated_by, updated_at=excluded.updated_at").bind(body.staff_id, body.night_mode, body.max_consecutive_days, body.min_rest_hours, me.id, new Date().toISOString()),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'shift_policy.updated', 'staff_shift_policy', body.staff_id, JSON.stringify({ night_mode: body.night_mode, max_consecutive_days: body.max_consecutive_days, min_rest_hours: body.min_rest_hours }))
+        ]);
+        return json({ ok: true });
+      }
+
+      if (pathname === '/api/workforce/qualifications' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT q.*, s.name AS staff_name, d.name AS department_name FROM staff_department_qualifications q JOIN staff s ON s.id=q.staff_id JOIN departments d ON d.id=q.department_id ORDER BY s.name, d.name, q.effective_from DESC'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/qualifications' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || typeof body.department_id !== 'string'
+          || !['0','1',0,1,false,true].includes(body.can_day)
+          || !['0','1',0,1,false,true].includes(body.can_night)
+          || !/^\\d{4}-\\d{2}-\\d{2}$/.test(body.effective_from || '')) {
+          return json({ error: 'Invalid qualification details' }, { status: 400 });
+        }
+        const staff = await env.DB.prepare('SELECT id, active, role FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const dept = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
+        if (!staff?.active || !dept) return json({ error: 'Active staff and operational department are required' }, { status: 400 });
+        const day = body.can_day === true || body.can_day === 1 || body.can_day === '1' ? 1 : 0;
+        const night = body.can_night === true || body.can_night === 1 || body.can_night === '1' ? 1 : 0;
+        if (!day && !night) return json({ error: 'At least one shift type must be enabled' }, { status: 400 });
+        if (night && ['duty_ops_manager','technical_assistant'].includes(staff.role)) return json({ error: 'Duty Ops Managers and Technical Assistants are day-only; emergency exceptions are handled separately' }, { status: 409 });
+        await env.DB.batch([
+          env.DB.prepare('UPDATE staff_department_qualifications SET effective_to = ? WHERE staff_id = ? AND department_id = ? AND effective_to IS NULL').bind(new Date(Date.now()-86400000).toISOString().slice(0,10), body.staff_id, body.department_id),
+          env.DB.prepare('INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approved_by, approval_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(body.staff_id, body.department_id, day, night, Number.isInteger(body.priority) ? Math.max(1, Math.min(1000, body.priority)) : 100, body.effective_from, me.id, String(body.approval_note || '').slice(0,500)),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'qualification.updated', 'staff_qualification', body.staff_id + ':' + body.department_id, JSON.stringify({ department_id: body.department_id, can_day: day, can_night: night, effective_from: body.effective_from }))
+        ]);
+        return json({ ok: true }, { status: 201 });
+      }
+
+      if (pathname === '/api/workforce/shift-exceptions' && request.method === 'GET') {
+        const denied = requireAnyPermission('exceptions.review');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          'SELECT e.*, s.name AS staff_name, r.name AS requester_name, v.name AS reviewer_name FROM workforce_shift_exceptions e JOIN staff s ON s.id=e.staff_id JOIN staff r ON r.id=e.requested_by LEFT JOIN staff v ON v.id=e.reviewed_by WHERE e.date LIKE ? ORDER BY e.date, e.created_at'
+        ).bind(month + '-%').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/shift-exceptions' && request.method === 'POST') {
+        const denied = requireAnyPermission('exceptions.request');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)
+          || typeof body.reason !== 'string' || body.reason.trim().length < 12 || body.reason.length > 1000
+          || !['N','NC'].includes(body.shift_code)) return json({ error: 'A valid employee, date, night shift code and detailed emergency reason are required' }, { status: 400 });
+        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const policy = await env.DB.prepare('SELECT night_mode FROM staff_shift_policies WHERE staff_id = ?').bind(body.staff_id).first();
+        if (!target?.active || policy?.night_mode !== 'exception_only') return json({ error: 'This employee is not configured for emergency-only night work' }, { status: 409 });
+        const id = crypto.randomUUID();
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO workforce_shift_exceptions (id, staff_id, date, shift_code, reason, status, requested_by) VALUES (?, ?, ?, ?, ?, 'pending', ?)").bind(id, body.staff_id, body.date, body.shift_code, body.reason.trim(), me.id),
+          env.DB.prepare("INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, 'shift_exception.requested', 'shift_exception', ?, ?)").bind(me.id, id, JSON.stringify({ staff_id: body.staff_id, date: body.date, shift_code: body.shift_code }))
+        ]);
+        return json({ id, status: 'pending' }, { status: 201 });
+      }
+
+      const exceptionMatch = pathname.match(/^\/api\/workforce\/shift-exceptions\/([^/]+)$/);
+      if (exceptionMatch && request.method === 'PATCH') {
+        const denied = requireAnyPermission('exceptions.approve');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!['approved','rejected'].includes(body.status)) return json({ error: 'status must be approved or rejected' }, { status: 400 });
+        const exception = await env.DB.prepare('SELECT * FROM workforce_shift_exceptions WHERE id = ?').bind(exceptionMatch[1]).first();
+        if (!exception) return json({ error: 'Exception not found' }, { status: 404 });
+        if (exception.status !== 'pending') return json({ error: 'Only pending exceptions can be reviewed' }, { status: 409 });
+        if (exception.requested_by === me.id) return json({ error: 'A requester cannot approve their own emergency exception' }, { status: 403 });
+        await env.DB.batch([
+          env.DB.prepare('UPDATE workforce_shift_exceptions SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND status = \'pending\'').bind(body.status, me.id, new Date().toISOString(), exception.id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'shift_exception.' + body.status, 'shift_exception', exception.id, JSON.stringify({ staff_id: exception.staff_id, date: exception.date, shift_code: exception.shift_code }))
+        ]);
+        return json({ ok: true, status: body.status });
+      }
+
+      if (pathname === '/api/workforce/duty-rota' && request.method === 'GET') {
+        const denied = requireAnyPermission('coverage.read');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          "SELECT r.*, s.name AS manager_name FROM duty_ops_assignments r LEFT JOIN staff s ON s.id=r.manager_staff_id WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month') ORDER BY r.duty_date"
+        ).bind(month + '-01', month + '-01').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/duty-rota/generate' && request.method === 'POST') {
+        const denied = requireAnyPermission('coverage.allocate');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!isValidMonth(body.month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const [year, monthNumber] = body.month.split('-').map(Number);
+        const days = new Date(year, monthNumber, 0).getDate();
+        const managers = await env.DB.prepare("SELECT id, name FROM staff WHERE active = 1 AND role = 'duty_ops_manager' ORDER BY id").all();
+        if (!managers.results.length) return json({ error: 'No active Duty Ops Managers are configured' }, { status: 409 });
+        const { results: managerPolicies } = await env.DB.prepare("SELECT staff_id, max_consecutive_days FROM staff_shift_policies WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1)").all();
+        const maxWorkStreak = new Map(managers.results.map(manager => [manager.id, managerPolicies.find(policy => policy.staff_id === manager.id)?.max_consecutive_days || 5]));
+        const { results: leaveRows } = await env.DB.prepare("SELECT staff_id, date FROM leave_requests WHERE status = 'approved' AND date >= ? AND date < date(?, '+1 month')").bind(body.month + '-01', body.month + '-01').all();
+        const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date, a.shift_code, d.id AS department_id, d.day_code FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id JOIN departments d ON d.id=s.department_id WHERE s.month = ? AND s.id = (SELECT s2.id FROM schedules s2 WHERE s2.month=s.month AND s2.department_id=s.department_id ORDER BY s2.generated_at DESC LIMIT 1) AND a.shift_code NOT IN ('O','L')").bind(body.month).all();
+        const { results: dayDemand } = await env.DB.prepare("SELECT id, day_min, day_code FROM departments WHERE operational_team=1 ORDER BY id").all();
+        const { results: managerQualifications } = await env.DB.prepare("SELECT staff_id, department_id FROM staff_department_qualifications WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1) AND can_day=1 AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)").bind(body.month + '-31', body.month + '-01').all();
+        const managerQualificationSet = new Set(managerQualifications.map(row => row.staff_id + ':' + row.department_id));
+        const dayCoverage = new Map();
+        for (const row of assignedRows) {
+          if (row.shift_code !== row.day_code) continue;
+          const key = row.date + ':' + row.department_id;
+          if (!dayCoverage.has(key)) dayCoverage.set(key, new Set());
+          dayCoverage.get(key).add(row.staff_id);
+        }
+        const leave = new Set(leaveRows.map(row => row.staff_id + ':' + row.date));
+        const assignmentByStaffDate = new Map();
+        for (const row of assignedRows) {
+          const key = row.staff_id + ':' + row.date;
+          if (!assignmentByStaffDate.has(key)) assignmentByStaffDate.set(key, []);
+          assignmentByStaffDate.get(key).push(row);
+        }
+        const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorDutyDates } = await env.DB.prepare("SELECT manager_staff_id, duty_date FROM duty_ops_assignments WHERE manager_staff_id IS NOT NULL AND duty_date >= date(?, '-7 days') AND duty_date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id WHERE s.status='published' AND a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const managerWorkDates = new Map(managers.results.map(manager => [manager.id, new Set()]));
+        for (const row of [...priorDutyDates.map(row => ({ staff_id: row.manager_staff_id, date: row.duty_date })), ...priorShiftDates, ...assignedRows]) {
+          if (managerWorkDates.has(row.staff_id)) managerWorkDates.get(row.staff_id).add(row.date);
+        }
+        function consecutiveDaysBefore(managerId, date) {
+          const dates = managerWorkDates.get(managerId) || new Set();
+          const [y, m, d] = date.split('-').map(Number);
+          let streak = 0;
+          for (let offset = 1; offset <= (maxWorkStreak.get(managerId) || 5); offset++) {
+            const previous = new Date(Date.UTC(y, m - 1, d - offset)).toISOString().slice(0,10);
+            if (!dates.has(previous)) break;
+            streak++;
+          }
+          return streak;
+        }
+        const counts = new Map(managers.results.map(manager => [manager.id, priorRows.find(row => row.manager_staff_id === manager.id)?.total || 0]));
+        const { results: priorTeamRows } = await env.DB.prepare("SELECT coverage_department_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND coverage_department_id IS NOT NULL GROUP BY coverage_department_id").bind(body.month + '-01', body.month + '-01').all();
+        const teamCoverCounts = new Map(dayDemand.map(department => [department.id, priorTeamRows.find(row => row.coverage_department_id === department.id)?.total || 0]));
+        const statements = [];
+        const exceptions = [];
+        for (let day = 1; day <= days; day++) {
+          const date = body.month + '-' + String(day).padStart(2, '0');
+          const eligible = managers.results.filter(manager => {
+            if (leave.has(manager.id + ':' + date)) return false;
+            const assignments = assignmentByStaffDate.get(manager.id + ':' + date) || [];
+            const alreadyOnDayShift = assignments.length > 0 && assignments.every(row => row.shift_code === row.day_code);
+            if (assignments.length > 0 && !alreadyOnDayShift) return false;
+            return alreadyOnDayShift || consecutiveDaysBefore(manager.id, date) < (maxWorkStreak.get(manager.id) || 5);
+          });
+          eligible.sort((a,b) => (counts.get(a.id) - counts.get(b.id)) || a.id.localeCompare(b.id));
+          const chosen = eligible[0] || null;
+          const chosenAssignments = chosen ? (assignmentByStaffDate.get(chosen.id + ':' + date) || []) : [];
+          let teamDepartment = chosenAssignments[0]?.department_id || null;
+          if (chosen && !teamDepartment) {
+            const shortages = dayDemand.filter(department =>
+              managerQualificationSet.has(chosen.id + ':' + department.id)
+              && (dayCoverage.get(date + ':' + department.id)?.size || 0) < department.day_min
+            ).sort((a,b) => {
+              const aDeficit = a.day_min - (dayCoverage.get(date + ':' + a.id)?.size || 0);
+              const bDeficit = b.day_min - (dayCoverage.get(date + ':' + b.id)?.size || 0);
+              const aRatio = aDeficit / Math.max(1, a.day_min);
+              const bRatio = bDeficit / Math.max(1, b.day_min);
+              return (bRatio - aRatio) || ((teamCoverCounts.get(a.id) || 0) - (teamCoverCounts.get(b.id) || 0)) || a.id.localeCompare(b.id);
+            });
+            teamDepartment = shortages[0]?.id || null;
+          }
+          const assignmentType = teamDepartment ? 'team_cover' : 'floating';
+          if (teamDepartment) teamCoverCounts.set(teamDepartment, (teamCoverCounts.get(teamDepartment) || 0) + 1);
+          if (chosen) {
+            counts.set(chosen.id, (counts.get(chosen.id) || 0) + 1);
+            managerWorkDates.get(chosen.id).add(date);
+          } else exceptions.push(date);
+          const id = crypto.randomUUID();
+          statements.push(env.DB.prepare("INSERT INTO duty_ops_assignments (id, duty_date, manager_staff_id, assignment_type, coverage_department_id, shift_code, reason, status, created_by) VALUES (?, ?, ?, ?, ?, 'MD', ?, ?, ?) ON CONFLICT(duty_date) DO UPDATE SET manager_staff_id=excluded.manager_staff_id, assignment_type=excluded.assignment_type, coverage_department_id=excluded.coverage_department_id, reason=excluded.reason, status=excluded.status, created_by=excluded.created_by").bind(id, date, chosen?.id || null, assignmentType, teamDepartment, chosen ? (teamDepartment ? 'Assigned to existing team day shift' : 'Fairness-balanced floating day duty') : 'No Duty Ops Manager available; manual resolution required', chosen ? 'assigned' : 'exception', me.id));
+          statements.push(env.DB.prepare("INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)").bind(me.id, chosen ? 'duty_rota.generated' : 'duty_rota.uncovered', 'duty_ops_assignment', date, JSON.stringify({ manager_staff_id: chosen?.id || null, month: body.month })));
+        }
+        if (statements.length) await env.DB.batch(statements);
+        return json({ ok: true, month: body.month, assigned_days: days - exceptions.length, uncovered_dates: exceptions });
+      }
+
+      if (pathname === '/api/workforce/duty-rota' && request.method === 'POST') {
+        const denied = requireAnyPermission('coverage.allocate');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(body.duty_date || '') || !isValidCalendarDate(body.duty_date)
+          || typeof body.manager_staff_id !== 'string'
+          || !['floating','team_cover'].includes(body.assignment_type || 'floating')) {
+          return json({ error: 'Invalid duty assignment' }, { status: 400 });
+        }
+        const manager = await env.DB.prepare("SELECT id FROM staff WHERE id = ? AND active = 1 AND role = 'duty_ops_manager'").bind(body.manager_staff_id).first();
+        if (!manager) return json({ error: 'An active Duty Ops Manager is required' }, { status: 400 });
+        const department = body.assignment_type === 'team_cover'
+          ? await env.DB.prepare("SELECT id FROM departments WHERE id = ? AND operational_team = 1").bind(body.coverage_department_id).first()
+          : null;
+        if (body.assignment_type === 'team_cover' && !department) return json({ error: 'A valid coverage department is required' }, { status: 400 });
+        const id = crypto.randomUUID();
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO duty_ops_assignments (id, duty_date, manager_staff_id, assignment_type, coverage_department_id, shift_code, reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(id, body.duty_date, body.manager_staff_id, body.assignment_type || 'floating', department?.id || null, 'MD', String(body.reason || '').slice(0,500), me.id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'duty_rota.assigned', 'duty_ops_assignment', id, JSON.stringify({ duty_date: body.duty_date, manager_staff_id: body.manager_staff_id, assignment_type: body.assignment_type || 'floating', coverage_department_id: department?.id || null }))
+        ]);
+        return json({ id, ok: true }, { status: 201 });
+      }
+
+      if (pathname === '/api/hr/staff' && request.method === 'GET') {
+        const denied = requireAnyPermission('staff.read');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY active DESC, department_id, name'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/hr/staff' && request.method === 'POST') {
+        const denied = requireAnyPermission('staff.lifecycle');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.name !== 'string' || body.name.trim().length < 2 || body.name.length > 120) return json({ error: 'Valid employee name is required' }, { status: 400 });
+        const homeDepartment = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
+        if (!homeDepartment) return json({ error: 'A valid operational home department is required' }, { status: 400 });
+        const id = (body.id || body.name.toLowerCase().trim().replace(/\\s+/g,'-').replace(/[^a-z0-9-]/g,'')).slice(0,80);
+        if (!/^[a-z0-9_-]{1,80}$/.test(id)) return json({ error: 'Invalid staff identifier' }, { status: 400 });
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, 'staff', 0)").bind(id, body.name.trim(), body.department_id),
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id }))
+        ]);
+        return json({ id, ok: true }, { status: 201 });
+      }
+
+      const hrStaffMatch = pathname.match(/^\/api\/hr\/staff\/([^/]+)$/);
+      if (hrStaffMatch && request.method === 'PATCH') {
+        const denied = requireAnyPermission('staff.lifecycle');
+        if (denied) return denied;
+        const staffId = hrStaffMatch[1];
+        const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+        if (!target) return json({ error: 'Staff account not found' }, { status: 404 });
+        const targetAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+        const hrAuthority = await env.DB.prepare("SELECT authority_level FROM role_hierarchy WHERE role = 'hr'").first();
+        if (targetAuthority?.authority_level >= (hrAuthority?.authority_level ?? 700)) return json({ error: 'HR cannot alter accounts at or above HR authority' }, { status: 403 });
+        const body = await request.json();
+        const updates = [], binds = [];
+        if (typeof body.name === 'string' && body.name.trim().length >= 2 && body.name.length <= 120) { updates.push('name = ?'); binds.push(body.name.trim()); }
+        if (typeof body.active === 'boolean') { updates.push('active = ?'); binds.push(body.active ? 1 : 0); }
+        if (!updates.length) return json({ error: 'No valid HR fields supplied' }, { status: 400 });
+        binds.push(staffId);
+        await env.DB.prepare('UPDATE staff SET ' + updates.join(', ') + ' WHERE id = ?').bind(...binds).run();
+        if (body.active === false) await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staffId).run();
+        await env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.hr_updated', 'staff', staffId, JSON.stringify({ name_changed: typeof body.name === 'string', active_changed: typeof body.active === 'boolean' })).run();
+        return json({ ok: true });
+      }
+
       // ── Staff ─────────────────────────────────────────────────────────
       if (pathname === '/api/staff' && request.method === 'GET') {
         const requestedDept = url.searchParams.get('department');
+        if (isAdmin && url.searchParams.get('all') === '1') {
+          const { results } = await env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name').all();
+          return json(results);
+        }
         const dept = isAdmin ? requestedDept : me.department_id;
-        const stmt = dept
-          ? env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE department_id = ? AND active = 1 ORDER BY name').bind(dept)
-          : env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name');
-        const { results } = await stmt.all();
+        if (dept) {
+          const { results } = await env.DB.prepare(
+            "SELECT DISTINCT s.id, s.name, s.department_id, s.role, s.pin_set FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active=1 AND q.effective_from <= date('now') AND (q.effective_to IS NULL OR q.effective_to >= date('now')) ORDER BY s.name"
+          ).bind(dept).all();
+          return json(results);
+        }
+        const { results } = await env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name').all();
         return json(results);
       }
 
@@ -228,10 +571,16 @@ export default {
           return json({ error: 'name and department_id are required' }, { status: 400 });
         }
         const id = body.id || body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-        await env.DB.prepare(
-          'INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)'
-        ).bind(id, body.name, body.department_id, body.role === 'admin' ? 'admin' : 'staff').run();
-        return json({ id, name: body.name, department_id: body.department_id }, { status: 201 });
+        const role = ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role) ? body.role : 'staff';
+        if (me.role !== 'admin' && ['admin','duty_ops_manager'].includes(role)) return json({ error: 'Only the platform administrator can create platform administrators or peer Duty Ops Managers' }, { status: 403 });
+        const selectedDepartment = await env.DB.prepare('SELECT id FROM departments WHERE id = ?').bind(body.department_id).first();
+        if (!selectedDepartment) return json({ error: 'Unknown department' }, { status: 400 });
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, ?, 0)').bind(id, body.name, body.department_id, role),
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id, role }))
+        ]);
+        return json({ id, name: body.name, department_id: body.department_id, role }, { status: 201 });
       }
 
       const staffIdMatch = pathname.match(/^\/api\/staff\/([^/]+)$/);
@@ -249,22 +598,41 @@ export default {
         if (request.method === 'PATCH') {
           const denied = requireAdmin();
           if (denied) return denied;
+          const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+          if (!target) return json({ error: 'Staff account not found' }, { status: 404 });
+          const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+          const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+          if (me.role !== 'admin' && (targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) {
+            return json({ error: 'You cannot modify an account at or above your authority level' }, { status: 403 });
+          }
           const body = await request.json();
+          if (staffId === me.id && body.role && body.role !== me.role) return json({ error: 'You cannot change your own authority' }, { status: 403 });
           const updates = [];
           const binds = [];
           if (body.name) { updates.push('name = ?'); binds.push(body.name); }
-          if (body.role && ['admin', 'staff'].includes(body.role)) {
+          if (body.role && ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role)) {
+            const nextLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(body.role).first();
+            if (me.role !== 'admin' && (nextLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) {
+              return json({ error: 'You cannot grant authority at or above your own level' }, { status: 403 });
+            }
             updates.push('role = ?'); binds.push(body.role);
           }
           if (updates.length === 0) return json({ error: 'Nothing to update' }, { status: 400 });
           binds.push(staffId);
-          await env.DB.prepare(`UPDATE staff SET ${updates.join(', ')} WHERE id = ?`).bind(...binds).run();
+          await env.DB.batch([
+            env.DB.prepare(`UPDATE staff SET ${updates.join(', ')} WHERE id = ?`).bind(...binds),
+            env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, body.role ? 'staff.role_updated' : 'staff.profile_updated', 'staff', staffId, JSON.stringify({ role: body.role || null, name_changed: typeof body.name === 'string' }))
+          ]);
           return json({ updated: true });
         }
         if (request.method === 'DELETE') {
           const denied = requireAdmin();
           if (denied) return denied;
           if (staffId === me.id) return json({ error: 'Cannot deactivate your own account' }, { status: 400 });
+          const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+          const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target?.role || 'staff').first();
+          const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+          if (me.role !== 'admin' && (targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) return json({ error: 'You cannot deactivate an account at or above your authority level' }, { status: 403 });
           await env.DB.prepare('UPDATE staff SET active = 0 WHERE id = ?').bind(staffId).run();
           await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staffId).run();
           return json({ deactivated: true });
@@ -276,7 +644,7 @@ export default {
         const staffId = url.searchParams.get('staff_id');
         const month   = url.searchParams.get('month');
         // Non-admins can see their own leave
-        const effectiveStaffId = isAdmin ? staffId : me.id;
+        const effectiveStaffId = canManageLeave ? staffId : me.id;
         let query = 'SELECT * FROM leave_requests WHERE 1=1';
         const binds = [];
         if (effectiveStaffId) { query += ' AND staff_id = ?'; binds.push(effectiveStaffId); }
@@ -286,7 +654,7 @@ export default {
       }
 
       if (pathname === '/api/leave' && request.method === 'POST') {
-        const denied = requireAdmin();
+        const denied = requireAnyPermission('leave.manage');
         if (denied) return denied;
         const body = await request.json();
         if (typeof body.staff_id !== 'string' || !isValidCalendarDate(body.date)) {
@@ -306,7 +674,7 @@ export default {
       }
 
       if (pathname.startsWith('/api/leave/') && request.method === 'DELETE') {
-        const denied = requireAdmin();
+        const denied = requireAnyPermission('leave.manage');
         if (denied) return denied;
         const id = pathname.split('/').pop();
         await env.DB.prepare('DELETE FROM leave_requests WHERE id = ?').bind(id).run();
@@ -475,12 +843,21 @@ export default {
         if (!dept) return json({ error: 'Unknown department' }, { status: 404 });
 
         const { results: staffRows } = await env.DB.prepare(
-          'SELECT id, name FROM staff WHERE department_id = ? AND active = 1 ORDER BY name'
-        ).bind(department_id).all();
+          "SELECT s.id, s.name, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=s.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?)) ORDER BY s.name"
+        ).bind(department_id, month + '-31', month + '-01', month + '-31', month + '-01').all();
 
         if (staffRows.length === 0) {
-          return json({ error: 'No active staff in this department' }, { status: 400 });
+          return json({ error: 'No active qualified staff in this department' }, { status: 400 });
         }
+        const { results: approvedExceptions } = await env.DB.prepare(
+          "SELECT staff_id, date FROM workforce_shift_exceptions WHERE status = 'approved' AND shift_code IN ('N','NC') AND date LIKE ?"
+        ).bind(month + '-%').all();
+        const exceptionDates = new Map();
+        for (const exception of approvedExceptions) {
+          if (!exceptionDates.has(exception.staff_id)) exceptionDates.set(exception.staff_id, []);
+          exceptionDates.get(exception.staff_id).push(exception.date);
+        }
+        for (const person of staffRows) person.night_exception_dates = exceptionDates.get(person.id) || [];
 
         const { results: leaveRows } = await env.DB.prepare(
           `SELECT staff_id, date FROM leave_requests
@@ -493,9 +870,13 @@ export default {
         for (const row of leaveRows) leaveByStaff[row.staff_id].add(row.date);
 
         const priorFinalState = await getPriorFinalState(env.DB, month, department_id, staffRows, dept);
+        const { results: dutyAssignments } = await env.DB.prepare(
+          "SELECT duty_date, manager_staff_id FROM duty_ops_assignments WHERE coverage_department_id = ? AND duty_date >= ? AND duty_date < date(?, '+1 month') AND status IN ('assigned','confirmed') AND manager_staff_id IS NOT NULL"
+        ).bind(department_id, month + '-01', month + '-01').all();
+        const preassignedAssignments = Object.fromEntries(dutyAssignments.map(row => [row.duty_date, row.manager_staff_id]));
 
         const { assignments, warnings, totals } = generateSchedule({
-          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState,
+          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState, preassignedAssignments,
         });
 
         const scheduleId = uuid();
@@ -547,20 +928,25 @@ export default {
       if (mineMatch && request.method === 'GET') {
         const id = mineMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
-        if (!schedule || schedule.department_id !== me.department_id) {
+        const qualification = schedule ? await env.DB.prepare(
+          "SELECT 1 AS eligible FROM staff_department_qualifications WHERE staff_id = ? AND department_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?) LIMIT 1"
+        ).bind(me.id, schedule.department_id, schedule.month + '-31', schedule.month + '-01').first() : null;
+        if (!schedule || (schedule.department_id !== me.department_id && !qualification)) {
           return json({ error: 'Not found' }, { status: 404 });
         }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
-          .bind(me.department_id).first();
+          .bind(schedule.department_id).first();
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, sa.date, sa.shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
-           WHERE sa.schedule_id = ? AND st.department_id = ?
+           JOIN staff_department_qualifications q ON q.staff_id = st.id AND q.department_id = ?
+           WHERE sa.schedule_id = ? AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?)
+             AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=st.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?))
            ORDER BY sa.date, st.name`
-        ).bind(id, me.department_id).all();
+        ).bind(schedule.department_id, id, schedule.month + '-31', schedule.month + '-01', schedule.month + '-31', schedule.month + '-01').all();
 
         const myShifts = {};
         for (const row of assignments) {
