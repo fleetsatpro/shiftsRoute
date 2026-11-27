@@ -430,6 +430,21 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       body: JSON.stringify({ staff_id: 'clinton-juma', date: clintonDate, status: 'approved', leave_type: 'SL' }),
     });
     assert.equal(reliefLeaveConflict.status, 409);
+
+    // Direct D1 writes must also respect the mutual-exclusion rules. These
+    // bypass Worker pre-checks deliberately to verify the database triggers.
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "INSERT INTO leave_requests (id,staff_id,date,status,leave_type) VALUES " +
+      "('trigger-leave-relief','clinton-juma','" + clintonDate + "','approved','SL');"
+    ], persistDir), /Leave conflicts with a pending or approved relief deployment/i);
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "INSERT INTO workforce_staff_markers (id,staff_id,date,marker_code,reason,status,created_by) VALUES " +
+      "('trigger-training-relief','clinton-juma','" + clintonDate + "','T','Conflict test for direct D1 write','approved','griffin');"
+    ], persistDir), /Training conflicts with a pending or approved relief deployment/i);
+    assert.throws(() => wrangler(['d1','execute',database,'--local','--command',
+      "INSERT INTO leave_requests (id,staff_id,date,status,leave_type) VALUES " +
+      "('trigger-leave-training','mercy-dorice','" + trainingDate + "','approved','SL');"
+    ], persistDir), /Leave conflicts with an approved trainee assignment/i);
     const visibleRelief = await fetch(baseUrl + '/api/workforce/relief-assignments?month=2026-12', { headers: { cookie: hildaCookie } });
     assert.equal(visibleRelief.status, 200);
     const reliefItems = await visibleRelief.json();
