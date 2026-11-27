@@ -174,14 +174,26 @@ export default {
 
       if (pathname === '/api/auth/me' && request.method === 'GET') {
         if (!me) return json({ error: 'Not signed in' }, { status: 401 });
-        return json(me);
+        return json({ ...me, permissions: permissionRows.map(row => row.permission), authority_level: await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first().then(row => row?.authority_level ?? 0) });
       }
 
       if (!me) return json({ error: 'Sign in required' }, { status: 401 });
 
-      const isAdmin = me.role === 'admin' || me.role === 'duty_ops_manager';
+      const { results: permissionRows } = await env.DB.prepare(
+        'SELECT permission FROM role_permissions WHERE role = ?'
+      ).bind(me.role).all();
+      const permissions = new Set(permissionRows.map(row => row.permission));
+      const isAdmin = permissions.has('system.configure') && permissions.has('staff.manage');
+      const isDutyOpsManager = me.role === 'duty_ops_manager';
+      const isHr = me.role === 'hr';
       function requireAdmin() {
-        if (!isAdmin) return json({ error: 'Admin access required' }, { status: 403 });
+        if (!isAdmin) return json({ error: 'Administrative permission required' }, { status: 403 });
+        return null;
+      }
+      function requireAnyPermission(...required) {
+        if (!required.some(permission => permissions.has(permission))) {
+          return json({ error: 'Insufficient permission' }, { status: 403 });
+        }
         return null;
       }
 
