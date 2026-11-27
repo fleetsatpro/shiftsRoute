@@ -258,3 +258,48 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) {
   .workspace-hero, .workspace-hero::after, .hero-orbit { animation:none !important; }
 }
+
+
+/* ── Precision motion and control surfaces ─────────────────── */
+.controls-bar {
+  position:relative;
+  padding:12px 14px;
+  margin:0 0 24px;
+  border:1px solid color-mix(in srgb,var(--accent) 13%,var(--border));
+  border-radius:14px;
+  background:color-mix(in srgb,var(--panel) 66%,transparent);
+  box-shadow:inset 0 1px rgba(255,255,255,.035),0 8px 24px rgba(0,0,0,.12);
+  backdrop-filter:blur(14px) saturate(130%);
+}
+.controls-bar .ctrl-label { color:var(--text-2); letter-spacing:.1em; }
+.controls-bar button { min-height:36px; }
+.tab-pane:not(.hidden) { animation:tab-arrive .34s cubic-bezier(.2,.7,.25,1) both; }
+.tab-pane:not(.hidden) > .panel,
+.tab-pane:not(.hidden) > .metrics-grid { animation:content-arrive .42s cubic-bezier(.2,.7,.25,1) both; }
+.tab-pane:not(.hidden) > .panel:nth-of-type(2) { animation-delay:45ms; }
+.tab-pane:not(.hidden) > .panel:nth-of-type(3) { animation-delay:85ms; }
+@keyframes tab-arrive { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } }
+@keyframes content-arrive { from { opacity:0; transform:translateY(9px) scale(.995); } to { opacity:1; transform:translateY(0) scale(1); } }
+@media (hover:hover) and (pointer:fine) {
+  .panel:hover { border-color:color-mix(in srgb,var(--accent) 25%,var(--border-2)); box-shadow:0 16px 42px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.04); }
+}
+.nav-btn.active { position:relative; font-weight:650; }
+.nav-btn.active::after {
+  content:""; position:absolute; right:10px; width:5px; height:5px; border-radius:50%;
+  background:var(--accent); box-shadow:0 0 12px var(--accent);
+}
+.theme-control {
+  display:flex; align-items:center; gap:7px; color:var(--text-3);
+  font:600 10px var(--font-mono); letter-spacing:.09em; text-transform:uppercase;
+}
+.theme-control select { min-height:32px; padding:5px 26px 5px 9px; }
+@media (max-width:768px) {
+  .controls-bar { gap:8px; padding:10px; border-radius:12px; }
+  .controls-bar .ctrl-group { flex:1 1 auto; }
+  .controls-bar .ctrl-group input, .controls-bar .ctrl-group select { min-width:0; max-width:100%; }
+  .theme-control > span { display:none; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .tab-pane:not(.hidden), .tab-pane:not(.hidden) > .panel,
+  .tab-pane:not(.hidden) > .metrics-grid { animation:none !important; }
+}
