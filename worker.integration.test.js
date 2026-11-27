@@ -203,6 +203,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.ok(overviewPayload.qualifications.some(q => q.staff_id === 'mercy-dorice' && q.department_id === 'SCE' && q.relief_only === 1));
     const clintonQualification = overviewPayload.qualifications.filter(q => q.staff_id === 'clinton-juma');
     assert.deepEqual(new Set(clintonQualification.map(q => q.department_id)), new Set(['ISOC','SCE']));
+    assert.ok(clintonQualification.every(q => q.designation === 'Field Supervisor' && q.relief_capable === 1));
     assert.ok(overviewPayload.staff.some(person => person.id === 'david' && person.active === 0));
 
     const hrRosterAdmin = await fetch(baseUrl + '/api/schedules/generate', {
@@ -235,26 +236,53 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.ok(!initialIsoc.assignments.some(row => row.staff_id === 'murad'),
       'SCE staff must not be used as a routine ISOC fallback');
 
-    const griffinSceOffDates = new Set(initialSce.assignments
-      .filter(row => row.staff_id === 'griffin' && row.shift_code === 'O')
-      .map(row => row.date));
-    const fullIsocDayDates = [...new Set(initialIsoc.assignments
-      .filter(row => row.department_id === 'ISOC' && row.shift_code === 'D')
-      .map(row => row.date))];
-    const reliefDate = fullIsocDayDates.find(date => griffinSceOffDates.has(date));
-    const deniedDate = fullIsocDayDates.find(date => griffinSceOffDates.has(date) && date !== reliefDate);
-    assert.ok(reliefDate, 'fixture needs Griffin off in SCE while the ISOC day shift is staffed');
-    assert.ok(deniedDate, 'fixture needs a second full-coverage day with Griffin available');
+    const griffinSceByDate = new Map(initialSce.assignments
+      .filter(row => row.staff_id === 'griffin').map(row => [row.date, row.shift_code]));
+    const griffinSceOffDates = new Set([...griffinSceByDate]
+      .filter(([, code]) => code === 'O').map(([date]) => date));
+    const isocDayCoverage = new Map();
+    for (const row of initialIsoc.assignments) {
+      const coveredCode = row.coverage_shift_code || row.shift_code;
+      const targetDesk = row.coverage_department_id || row.department_id;
+      if (targetDesk !== 'ISOC' || coveredCode !== 'D' || ['O','L','PL','ML','SL'].includes(row.shift_code)) continue;
+      isocDayCoverage.set(row.date, (isocDayCoverage.get(row.date) || 0) + 1);
+    }
+    const fullIsocDayDates = [...isocDayCoverage]
+      .filter(([, count]) => count >= 3).map(([date]) => date);
+    const isWorkCode = code => ['D','N','DC','NC','T','FSA'].includes(code);
+    const validReliefDates = fullIsocDayDates.filter(date => {
+      if (!griffinSceOffDates.has(date)) return false;
+      const previousDate = new Date(Date.parse(date + 'T00:00:00Z') - 86400000).toISOString().slice(0,10);
+      const previousCode = griffinSceByDate.get(previousDate);
+      if (['N','NC'].includes(previousCode)) return false;
+      let before = 0, after = 0;
+      for (let offset=1; offset<=7; offset++) {
+        const prior = new Date(Date.parse(date + 'T00:00:00Z') - offset*86400000).toISOString().slice(0,10);
+        if (!isWorkCode(griffinSceByDate.get(prior))) break;
+        before++;
+      }
+      for (let offset=1; offset<=7; offset++) {
+        const next = new Date(Date.parse(date + 'T00:00:00Z') + offset*86400000).toISOString().slice(0,10);
+        if (!isWorkCode(griffinSceByDate.get(next))) break;
+        after++;
+      }
+      return before + 1 + after <= 5;
+    });
+    const reliefDate = validReliefDates[0];
+    const deniedDate = validReliefDates.find(date => date !== reliefDate);
+    assert.ok(reliefDate, 'fixture needs an actual ISOC day shortage candidate that respects Griffin’s rest and work-streak limits');
+    assert.ok(deniedDate, 'fixture needs a second full-coverage day for the no-shortage denial');
 
-    const requestRelief = (cookie, staff_id, duty_date, display_code = 'D') => fetch(baseUrl + '/api/workforce/relief-assignments', {
+    const requestRelief = (cookie, staff_id, duty_date, {
+      target_department_id = 'ISOC', shift_code = 'D', display_code = shift_code,
+    } = {}) => fetch(baseUrl + '/api/workforce/relief-assignments', {
       method: 'POST', headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({
-        staff_id, duty_date, target_department_id: 'ISOC', shift_code: 'D',
-        display_code,
-        reason: 'Unexpected absence reduced ISOC day staffing below its required minimum',
+        staff_id, duty_date, target_department_id, shift_code, display_code,
+        reason: 'Unexpected absence reduced desk staffing below its required minimum',
       }),
     });
-    const noShortage = await requestRelief(hildaCookie, 'griffin', deniedDate);
+    const noShortage = await requestRelief(hildaCookie, 'griffin', deniedDate, { target_department_id: 'ISOC', shift_code: 'D' });
     assert.equal(noShortage.status, 409, await noShortage.clone().text());
     assert.match((await noShortage.json()).error, /already meets its minimum/i);
 
@@ -263,7 +291,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + initialIsoc.id +
       "' AND date='" + reliefDate + "' AND shift_code='D';"
     ], persistDir);
-    const reliefRequest = await requestRelief(hildaCookie, 'griffin', reliefDate);
+    const reliefRequest = await requestRelief(hildaCookie, 'griffin', reliefDate, { target_department_id: 'ISOC', shift_code: 'D' });
     assert.equal(reliefRequest.status, 201, await reliefRequest.clone().text());
     const requested = await reliefRequest.json();
     const selfApproval = await fetch(baseUrl + '/api/workforce/relief-assignments/' + requested.id, {
@@ -301,7 +329,9 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
       "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + isocWithGriffinRelief.id +
       "' AND date='" + clintonDate + "' AND shift_code='D';"
     ], persistDir);
-    const clintonRequest = await requestRelief(hildaCookie, 'clinton-juma', clintonDate, 'FSA');
+    const clintonRequest = await requestRelief(hildaCookie, 'clinton-juma', clintonDate, {
+      target_department_id: 'ISOC', shift_code: 'D', display_code: 'FSA',
+    });
     assert.equal(clintonRequest.status, 201, await clintonRequest.clone().text());
     const clintonRelief = await clintonRequest.json();
     const clintonApproved = await fetch(baseUrl + '/api/workforce/relief-assignments/' + clintonRelief.id, {
@@ -321,19 +351,62 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(clintonData.my_shift_details[clintonDate].coverage_department_id, 'ISOC');
     assert.equal(clintonData.my_shift_details[clintonDate].coverage_shift_code, 'D');
 
+    // The same Field Supervisor can also relieve SCE/SCM on night duty.
+    const sceNightDate = [...new Set(sceWithGriffinRelief.assignments
+      .filter(row => row.department_id === 'SCE' && row.shift_code === 'NC')
+      .map(row => row.date))]
+      .find(date => Math.abs(Date.parse(date + 'T00:00:00Z') - Date.parse(clintonDate + 'T00:00:00Z')) > 2 * 86400000);
+    assert.ok(sceNightDate, 'fixture needs a second SCE night shift outside the first FSA deployment window');
+    wrangler(['d1','execute',database,'--local','--command',
+      "UPDATE shift_assignments SET shift_code='O' WHERE schedule_id='" + sceWithGriffinRelief.id +
+      "' AND date='" + sceNightDate + "' AND shift_code='NC';"
+    ], persistDir);
+    const sceNightRequest = await requestRelief(hildaCookie, 'clinton-juma', sceNightDate, {
+      target_department_id: 'SCE', shift_code: 'NC', display_code: 'FSA',
+    });
+    assert.equal(sceNightRequest.status, 201, await sceNightRequest.clone().text());
+    const sceNightRelief = await sceNightRequest.json();
+    const sceNightApproval = await fetch(baseUrl + '/api/workforce/relief-assignments/' + sceNightRelief.id, {
+      method: 'PATCH', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+    assert.equal(sceNightApproval.status, 200, await sceNightApproval.clone().text());
+    const sceWithFsa = await generateDepartment('SCE');
+    const fsaNightRow = sceWithFsa.assignments.find(row => row.staff_id === 'clinton-juma' && row.date === sceNightDate);
+    assert.equal(fsaNightRow?.shift_code, 'FSA');
+    assert.equal(fsaNightRow?.coverage_department_id, 'SCE');
+    assert.equal(fsaNightRow?.coverage_shift_code, 'NC');
+    const clintonUpdatedPersonal = await fetch(baseUrl + '/api/workforce/my-roster?month=2026-12', { headers: { cookie: clintonCookie } });
+    const clintonUpdatedData = await clintonUpdatedPersonal.json();
+    assert.equal(clintonUpdatedData.my_shifts[sceNightDate], 'FSA');
+    assert.equal(clintonUpdatedData.my_shift_details[sceNightDate].coverage_department_id, 'SCE');
+    assert.equal(clintonUpdatedData.my_shift_details[sceNightDate].coverage_shift_code, 'NC');
+
     // Mercy Wanyoike records typed leave and training for Mercy Dorice.
     const doriceCookie = await enrollAccount('mercy-dorice', '624814', enrollmentCodes['mercy-dorice']);
     const doriceOffDates = isocWithFsa.assignments
       .filter(row => row.staff_id === 'mercy-dorice' && row.shift_code === 'O')
       .map(row => row.date);
-    assert.ok(doriceOffDates.length >= 2, 'Mercy Dorice must have at least two available days');
+    assert.ok(doriceOffDates.length >= 4, 'Mercy Dorice must have four available days for distinct leave and training states');
     const paternityDate = doriceOffDates[0];
-    const trainingDate = doriceOffDates.find(date => date !== paternityDate);
+    const maternityDate = doriceOffDates.find(date => date !== paternityDate);
+    const sickDate = doriceOffDates.find(date => date !== paternityDate && date !== maternityDate);
+    const trainingDate = doriceOffDates.find(date => date !== paternityDate && date !== maternityDate && date !== sickDate);
     const typedLeave = await fetch(baseUrl + '/api/leave', {
       method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ staff_id: 'mercy-dorice', date: paternityDate, status: 'approved', leave_type: 'PL' }),
     });
     assert.equal(typedLeave.status, 201, await typedLeave.clone().text());
+    const maternityLeave = await fetch(baseUrl + '/api/leave', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ staff_id: 'mercy-dorice', date: maternityDate, status: 'approved', leave_type: 'ML' }),
+    });
+    assert.equal(maternityLeave.status, 201, await maternityLeave.clone().text());
+    const sickLeave = await fetch(baseUrl + '/api/leave', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ staff_id: 'mercy-dorice', date: sickDate, status: 'approved', leave_type: 'SL' }),
+    });
+    assert.equal(sickLeave.status, 201, await sickLeave.clone().text());
     const trainee = await fetch(baseUrl + '/api/workforce/staff-markers', {
       method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ staff_id: 'mercy-dorice', date: trainingDate, marker_code: 'T', reason: 'New ISOC controller induction with assigned supervisor' }),
@@ -341,11 +414,15 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(trainee.status, 201, await trainee.clone().text());
     const regeneratedIsoc = await generateDepartment('ISOC');
     assert.equal(regeneratedIsoc.assignments.find(row => row.staff_id === 'mercy-dorice' && row.date === paternityDate)?.shift_code, 'PL');
+    assert.equal(regeneratedIsoc.assignments.find(row => row.staff_id === 'mercy-dorice' && row.date === maternityDate)?.shift_code, 'ML');
+    assert.equal(regeneratedIsoc.assignments.find(row => row.staff_id === 'mercy-dorice' && row.date === sickDate)?.shift_code, 'SL');
     assert.equal(regeneratedIsoc.assignments.find(row => row.staff_id === 'mercy-dorice' && row.date === trainingDate)?.shift_code, 'T');
     const doricePersonal = await fetch(baseUrl + '/api/workforce/my-roster?month=2026-12', { headers: { cookie: doriceCookie } });
     assert.equal(doricePersonal.status, 200);
     const doriceData = await doricePersonal.json();
     assert.equal(doriceData.my_shifts[paternityDate], 'PL');
+    assert.equal(doriceData.my_shifts[maternityDate], 'ML');
+    assert.equal(doriceData.my_shifts[sickDate], 'SL');
     assert.equal(doriceData.my_shifts[trainingDate], 'T');
 
     const reliefLeaveConflict = await fetch(baseUrl + '/api/leave', {
@@ -358,6 +435,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const reliefItems = await visibleRelief.json();
     assert.ok(reliefItems.some(row => row.id === requested.id && row.status === 'approved'));
     assert.ok(reliefItems.some(row => row.id === clintonRelief.id && row.status === 'approved'));
+    assert.ok(reliefItems.some(row => row.id === sceNightRelief.id && row.status === 'approved'));
 
     // HR assigns an effective-dated, anchored cycle. Re-generation must
     // preserve the sequence rather than let the fairness optimiser reshuffle it.
