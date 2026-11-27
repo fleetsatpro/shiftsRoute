@@ -390,6 +390,8 @@ export default {
         const days = new Date(year, monthNumber, 0).getDate();
         const managers = await env.DB.prepare("SELECT id, name FROM staff WHERE active = 1 AND role = 'duty_ops_manager' ORDER BY id").all();
         if (!managers.results.length) return json({ error: 'No active Duty Ops Managers are configured' }, { status: 409 });
+        const { results: managerPolicies } = await env.DB.prepare("SELECT staff_id, max_consecutive_days FROM staff_shift_policies WHERE staff_id IN (SELECT id FROM staff WHERE role='duty_ops_manager' AND active=1)").all();
+        const maxWorkStreak = new Map(managers.results.map(manager => [manager.id, managerPolicies.find(policy => policy.staff_id === manager.id)?.max_consecutive_days || 5]));
         const { results: leaveRows } = await env.DB.prepare("SELECT staff_id, date FROM leave_requests WHERE status = 'approved' AND date >= ? AND date < date(?, '+1 month')").bind(body.month + '-01', body.month + '-01').all();
         const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date, a.shift_code, d.id AS department_id, d.day_code FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id JOIN departments d ON d.id=s.department_id WHERE s.month = ? AND s.id = (SELECT s2.id FROM schedules s2 WHERE s2.month=s.month AND s2.department_id=s.department_id ORDER BY s2.generated_at DESC LIMIT 1) AND a.shift_code NOT IN ('O','L')").bind(body.month).all();
         const { results: dayDemand } = await env.DB.prepare("SELECT id, day_min, day_code FROM departments WHERE operational_team=1 ORDER BY id").all();
@@ -410,6 +412,23 @@ export default {
           assignmentByStaffDate.get(key).push(row);
         }
         const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorDutyDates } = await env.DB.prepare("SELECT manager_staff_id, duty_date FROM duty_ops_assignments WHERE manager_staff_id IS NOT NULL AND duty_date >= date(?, '-7 days') AND duty_date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const { results: priorShiftDates } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a WHERE a.date >= date(?, '-7 days') AND a.date < ?").bind(body.month + '-01', body.month + '-01').all();
+        const managerWorkDates = new Map(managers.results.map(manager => [manager.id, new Set()]));
+        for (const row of [...priorDutyDates.map(row => ({ staff_id: row.manager_staff_id, date: row.duty_date })), ...priorShiftDates, ...assignedRows]) {
+          if (managerWorkDates.has(row.staff_id)) managerWorkDates.get(row.staff_id).add(row.date);
+        }
+        function consecutiveDaysBefore(managerId, date) {
+          const dates = managerWorkDates.get(managerId) || new Set();
+          const [y, m, d] = date.split('-').map(Number);
+          let streak = 0;
+          for (let offset = 1; offset <= (maxWorkStreak.get(managerId) || 5); offset++) {
+            const previous = new Date(Date.UTC(y, m - 1, d - offset)).toISOString().slice(0,10);
+            if (!dates.has(previous)) break;
+            streak++;
+          }
+          return streak;
+        }
         const counts = new Map(managers.results.map(manager => [manager.id, priorRows.find(row => row.manager_staff_id === manager.id)?.total || 0]));
         const { results: priorTeamRows } = await env.DB.prepare("SELECT coverage_department_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND coverage_department_id IS NOT NULL GROUP BY coverage_department_id").bind(body.month + '-01', body.month + '-01').all();
         const teamCoverCounts = new Map(dayDemand.map(department => [department.id, priorTeamRows.find(row => row.coverage_department_id === department.id)?.total || 0]));
@@ -420,7 +439,9 @@ export default {
           const eligible = managers.results.filter(manager => {
             if (leave.has(manager.id + ':' + date)) return false;
             const assignments = assignmentByStaffDate.get(manager.id + ':' + date) || [];
-            return assignments.length === 0 || assignments.every(row => row.shift_code === row.day_code);
+            const alreadyOnDayShift = assignments.length > 0 && assignments.every(row => row.shift_code === row.day_code);
+            if (assignments.length > 0 && !alreadyOnDayShift) return false;
+            return alreadyOnDayShift || consecutiveDaysBefore(manager.id, date) < (maxWorkStreak.get(manager.id) || 5);
           });
           eligible.sort((a,b) => (counts.get(a.id) - counts.get(b.id)) || a.id.localeCompare(b.id));
           const chosen = eligible[0] || null;
@@ -441,8 +462,10 @@ export default {
           }
           const assignmentType = teamDepartment ? 'team_cover' : 'floating';
           if (teamDepartment) teamCoverCounts.set(teamDepartment, (teamCoverCounts.get(teamDepartment) || 0) + 1);
-          if (chosen) counts.set(chosen.id, (counts.get(chosen.id) || 0) + 1);
-          else exceptions.push(date);
+          if (chosen) {
+            counts.set(chosen.id, (counts.get(chosen.id) || 0) + 1);
+            managerWorkDates.get(chosen.id).add(date);
+          } else exceptions.push(date);
           const id = crypto.randomUUID();
           statements.push(env.DB.prepare("INSERT INTO duty_ops_assignments (id, duty_date, manager_staff_id, assignment_type, coverage_department_id, shift_code, reason, status, created_by) VALUES (?, ?, ?, ?, ?, 'MD', ?, ?, ?) ON CONFLICT(duty_date) DO UPDATE SET manager_staff_id=excluded.manager_staff_id, assignment_type=excluded.assignment_type, coverage_department_id=excluded.coverage_department_id, reason=excluded.reason, status=excluded.status, created_by=excluded.created_by").bind(id, date, chosen?.id || null, assignmentType, teamDepartment, chosen ? (teamDepartment ? 'Assigned to existing team day shift' : 'Fairness-balanced floating day duty') : 'No Duty Ops Manager available; manual resolution required', chosen ? 'assigned' : 'exception', me.id));
           statements.push(env.DB.prepare("INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)").bind(me.id, chosen ? 'duty_rota.generated' : 'duty_rota.uncovered', 'duty_ops_assignment', date, JSON.stringify({ manager_staff_id: chosen?.id || null, month: body.month })));
