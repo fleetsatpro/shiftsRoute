@@ -788,9 +788,13 @@ export default {
         for (const row of leaveRows) leaveByStaff[row.staff_id].add(row.date);
 
         const priorFinalState = await getPriorFinalState(env.DB, month, department_id, staffRows, dept);
+        const { results: dutyAssignments } = await env.DB.prepare(
+          "SELECT duty_date, manager_staff_id FROM duty_ops_assignments WHERE coverage_department_id = ? AND duty_date >= ? AND duty_date < date(?, '+1 month') AND status IN ('assigned','confirmed') AND manager_staff_id IS NOT NULL"
+        ).bind(department_id, month + '-01', month + '-01').all();
+        const preassignedAssignments = Object.fromEntries(dutyAssignments.map(row => [row.duty_date, row.manager_staff_id]));
 
         const { assignments, warnings, totals } = generateSchedule({
-          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState,
+          month, department: dept, staff: staffRows, leaveByStaff, priorFinalState, preassignedAssignments,
         });
 
         const scheduleId = uuid();
