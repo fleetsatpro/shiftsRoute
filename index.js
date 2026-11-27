@@ -384,6 +384,9 @@ export default {
           const swap = await env.DB.prepare('SELECT * FROM swap_requests WHERE id = ?').bind(swapId).first();
           if (!swap) return json({ error: 'Swap request not found' }, { status: 404 });
           if (swap.status !== 'pending') return json({ error: 'Only pending swap requests can be reviewed' }, { status: 409 });
+          if (action === 'approve' && !isValidCalendarDate(swap.date)) {
+            return json({ error: 'Swap request contains an invalid date and cannot be approved' }, { status: 409 });
+          }
           if (action === 'reject') {
             const result = await env.DB.prepare("UPDATE swap_requests SET status = 'rejected' WHERE id = ? AND status = 'pending'").bind(swapId).run();
             if (!result.meta?.changes) return json({ error: 'Request state changed; reload and retry' }, { status: 409 });
@@ -606,28 +609,38 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
 
-        const scheduleId = patchMatch[1];
-        const targetSchedule = await env.DB.prepare('SELECT status FROM schedules WHERE id = ?').bind(scheduleId).first();
+        const targetSchedule = await env.DB.prepare(
+          'SELECT id, status, month, department_id FROM schedules WHERE id = ?'
+        ).bind(scheduleId).first();
         if (!targetSchedule) return json({ error: 'Schedule not found' }, { status: 404 });
-        if (targetSchedule.status === 'published') {
-          return json({ error: 'Published schedules are immutable. Create a new draft version to make changes.' }, { status: 409 });
+        if (targetSchedule.status !== 'draft') {
+          return json({ error: 'Only draft schedules are editable. Create a new draft version to make changes.' }, { status: 409 });
         }
         const body = await request.json();
         const { staff_id, date, shift_code } = body;
 
-        if (typeof staff_id !== 'string' || !isValidCalendarDate(date) || !shift_code) {
-          return json({ error: 'staff_id, valid YYYY-MM-DD date, and shift_code required' }, { status: 400 });
+        if (typeof staff_id !== 'string' || !isValidCalendarDate(date) || !shift_code
+          || date.slice(0, 7) !== targetSchedule.month) {
+          return json({ error: 'staff_id, a valid date in the schedule month, and shift_code are required' }, { status: 400 });
         }
 
-        const validCodes = ['D', 'N', 'DC', 'NC', 'O', 'L'];
+        const department = await env.DB.prepare(
+          'SELECT day_code, night_code FROM departments WHERE id = ?'
+        ).bind(targetSchedule.department_id).first();
+        const validCodes = department
+          ? [department.day_code, department.night_code, 'O', 'L']
+          : [];
         if (!validCodes.includes(shift_code)) {
-          return json({ error: `invalid shift_code — must be one of ${validCodes.join(', ')}` }, { status: 400 });
+          return json({ error: 'Shift code is not valid for this department' }, { status: 400 });
         }
 
-        // Verify the assignment row exists
+        // Confirm the staff member belongs to the schedule's department.
         const existing = await env.DB.prepare(
-          'SELECT id FROM shift_assignments WHERE schedule_id = ? AND staff_id = ? AND date = ?'
-        ).bind(scheduleId, staff_id, date).first();
+          `SELECT sa.id FROM shift_assignments sa
+           JOIN staff st ON st.id = sa.staff_id
+           WHERE sa.schedule_id = ? AND sa.staff_id = ? AND sa.date = ?
+             AND st.department_id = ?`
+        ).bind(scheduleId, staff_id, date, targetSchedule.department_id).first();
         if (!existing) return json({ error: 'Assignment not found' }, { status: 404 });
 
         const update = await env.DB.prepare(
