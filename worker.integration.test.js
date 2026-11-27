@@ -172,6 +172,17 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.ok(rotaRows.every(row => row.manager_staff_id && row.status === 'assigned'));
     assert.ok(rotaRows.some(row => row.coverage_department_id === 'ISOC'));
     assert.ok(rotaRows.some(row => row.coverage_department_id === 'SCE'));
+
+    const malformedManualRota = await fetch(baseUrl + '/api/workforce/duty-rota', {
+      method: 'POST', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ duty_date: '2027-1-2', manager_staff_id: 'hilda', assignment_type: 'floating', reason: 'Malformed date regression test' }),
+    });
+    assert.equal(malformedManualRota.status, 400, await malformedManualRota.clone().text());
+    const validManualRota = await fetch(baseUrl + '/api/workforce/duty-rota', {
+      method: 'POST', headers: { cookie: griffinCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ duty_date: '2027-01-02', manager_staff_id: 'hilda', assignment_type: 'floating', reason: 'Valid manual coverage regression test' }),
+    });
+    assert.equal(validManualRota.status, 201, await validManualRota.clone().text());
     for (const managerId of ['hilda','mukasa']) {
       let streak = 0;
       for (const row of rotaRows) {
@@ -494,6 +505,16 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     });
     assert.equal(newHire.status, 201, await newHire.clone().text());
     const newHireData = await newHire.json();
+    assert.equal(newHireData.id, 'new-sce-controller', 'staff names should become readable, hyphenated stable ids');
+    const malformedEffectiveDate = await fetch(baseUrl + '/api/workforce/qualifications', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staff_id: newHireData.id, department_id: 'ISOC',
+        can_day: 1, can_night: 0, effective_from: '2026-12-1',
+        approval_note: 'Reject malformed calendar date',
+      }),
+    });
+    assert.equal(malformedEffectiveDate.status, 400, await malformedEffectiveDate.clone().text());
     const prematureCrossQualification = await fetch(baseUrl + '/api/workforce/qualifications', {
       method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
       body: JSON.stringify({
