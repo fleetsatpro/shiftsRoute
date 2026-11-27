@@ -231,6 +231,9 @@ function improveBalance({ state, staff, totals, month, nDays, department, dayCod
     const freeCode = state[free][day];
 
     if ((busyCode !== dayCode && busyCode !== nightCode) || freeCode !== OFF) continue;
+    const freePerson = staff.find(person => person.id === free);
+    if (busyCode === dayCode && freePerson?.can_day === 0) continue;
+    if (busyCode === nightCode && freePerson?.can_night === 0) continue;
 
     // Attempt swap
     state[busy][day] = OFF;
