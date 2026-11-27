@@ -975,7 +975,7 @@ function renderMine() {
     const isWorking = WORK_CODES.has(code);
     const isLeave = LEAVE_CODES.has(code);
     if (filter === 'working' && !isWorking) continue;
-    if (filter === 'off' && (isWorking || isLeave)) continue;
+    if (filter === 'off' && (isWorking || isLeave || code !== 'O')) continue;
     const coworkers = Array.isArray(coworkers_by_date[date]) ? coworkers_by_date[date] : [];
     const safeCode = safeShiftCode(code);
     const coveredCode = detail.coverage_shift_code || code;
