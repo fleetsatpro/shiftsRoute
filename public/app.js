@@ -386,8 +386,9 @@ async function resetPin(staffId, name) {
       body: JSON.stringify({ staff_id: staffId }),
     });
     await loadStaffTable();
-    window.prompt(`Share this one-time enrollment code securely with ${name}. It will not be shown again:`, result.enrollment_code);
-    toast(`PIN reset for ${name}; one-time code issued.`, 'success');
+    el('enrollmentCodeValue').value = result.enrollment_code;
+    openModal('enrollmentCodeModal');
+    toast(`PIN reset for ${name}; share the displayed one-time code securely.`, 'success', 5000);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
@@ -968,6 +969,24 @@ function init() {
   el('cancelAddStaff').addEventListener('click', () => closeModal('addStaffModal'));
   el('confirmAddStaff').addEventListener('click', addStaffMember);
   el('addStaffModal').addEventListener('click', e => { if (e.target === el('addStaffModal')) closeModal('addStaffModal'); });
+
+  // One-time enrollment code: keep it visible only in the dedicated dialog.
+  el('closeEnrollmentCode').addEventListener('click', () => {
+    closeModal('enrollmentCodeModal');
+    el('enrollmentCodeValue').value = '';
+  });
+  el('copyEnrollmentCode').addEventListener('click', async () => {
+    const code = el('enrollmentCodeValue').value;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      toast('Enrollment code copied. Share it securely.', 'success');
+    } catch {
+      el('enrollmentCodeValue').focus();
+      el('enrollmentCodeValue').select();
+      toast('Select and copy the highlighted code, then share it securely.', 'info', 5000);
+    }
+  });
 
   // Swap modal
   el('newSwapBtn').addEventListener('click', openNewSwap);
