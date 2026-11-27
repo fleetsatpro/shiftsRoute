@@ -855,19 +855,40 @@ async function onCellClick(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ staff_id: staffId, date, shift_code: next }),
     });
-    const scrollLeft = el('gridWrap').scrollLeft;
-    const scrollTop = el('gridWrap').scrollTop;
-    state.schedule = await api(`/schedules/${state.schedule.id}`);
-    renderGrid();
-    el('gridWrap').scrollLeft = scrollLeft;
-    el('gridWrap').scrollTop = scrollTop;
-    toast(`${date}: ${next} saved.`, 'success', 1800);
   } catch (err) {
     btn.disabled = false;
     btn.textContent = current;
     btn.dataset.saving = '0';
     if (!wasOverride) cell.classList.remove('override');
     toast('Update failed: ' + err.message, 'error');
+    return;
+  }
+
+  // The write is confirmed. Reflect it locally first, then reconcile with the
+  // server snapshot; a failed refresh must never report a successful write as failed.
+  const assignment = state.schedule.assignments?.find(row =>
+    row.staff_id === staffId && row.date === date
+  );
+  if (assignment) {
+    assignment.shift_code = next;
+    assignment.is_manual_override = 1;
+  }
+  const scrollLeft = el('gridWrap').scrollLeft;
+  const scrollTop = el('gridWrap').scrollTop;
+  renderGrid();
+  el('gridWrap').scrollLeft = scrollLeft;
+  el('gridWrap').scrollTop = scrollTop;
+  toast(`${date}: ${next} saved.`, 'success', 1800);
+
+  try {
+    state.schedule = await api(`/schedules/${state.schedule.id}`);
+    const left = el('gridWrap').scrollLeft;
+    const top = el('gridWrap').scrollTop;
+    renderGrid();
+    el('gridWrap').scrollLeft = left;
+    el('gridWrap').scrollTop = top;
+  } catch (err) {
+    toast('Saved, but the latest roster snapshot could not be refreshed.', 'warning', 4500);
   }
 }
 
@@ -885,7 +906,12 @@ function init() {
   el('dept').addEventListener('change', onDeptOrMonthChange);
   el('month').addEventListener('change', onDeptOrMonthChange);
   el('generateBtn').addEventListener('click', generate);
-  el('loadBtn').addEventListener('click', async () => { showLoading(); try { await loadLatest(); } finally { hideLoading(); } });
+  el('loadBtn').addEventListener('click', async () => {
+    showLoading('Refreshing schedule…');
+    try { await loadLatest(); toast('Schedule refreshed.', 'success', 1600); }
+    catch (err) { toast('Refresh failed: ' + err.message, 'error'); }
+    finally { hideLoading(); }
+  });
   el('publishBtn').addEventListener('click', publish);
   el('exportBtn').addEventListener('click', exportCsv);
   el('logoutBtn').addEventListener('click', logout);
