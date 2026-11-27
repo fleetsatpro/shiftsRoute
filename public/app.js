@@ -362,7 +362,7 @@ async function removeLeave(id) {
 
 async function onDeptOrMonthChange() {
   const nextMonth = el('month').value;
-  if (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(nextMonth)) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(nextMonth)) {
     toast('Choose a valid month.', 'warning');
     return;
   }
