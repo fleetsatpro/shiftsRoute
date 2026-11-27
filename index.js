@@ -532,6 +532,7 @@ export default {
             return json({ error: 'You cannot modify an account at or above your authority level' }, { status: 403 });
           }
           const body = await request.json();
+          if (staffId === me.id && body.role && body.role !== me.role) return json({ error: 'You cannot change your own authority' }, { status: 403 });
           const updates = [];
           const binds = [];
           if (body.name) { updates.push('name = ?'); binds.push(body.name); }
