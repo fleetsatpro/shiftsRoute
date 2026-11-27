@@ -609,6 +609,7 @@ export default {
         const denied = requireAdmin();
         if (denied) return denied;
 
+        const scheduleId = patchMatch[1];
         const targetSchedule = await env.DB.prepare(
           'SELECT id, status, month, department_id FROM schedules WHERE id = ?'
         ).bind(scheduleId).first();
