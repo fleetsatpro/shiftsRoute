@@ -1148,6 +1148,14 @@ function init() {
     if (button) removeLeave(button.dataset.leaveId);
   });
 
+  // HR and Duty Ops workspaces.
+  el('hrAddEmployee').addEventListener('click', () => openModal('hrAddModal'));
+  el('hrCancelAdd').addEventListener('click', () => closeModal('hrAddModal'));
+  el('hrConfirmAdd').addEventListener('click', addHrEmployee);
+  el('hrAddModal').addEventListener('click', e => { if (e.target === el('hrAddModal')) closeModal('hrAddModal'); });
+  el('hrQualificationForm').addEventListener('submit', saveHrQualification);
+  el('generateDutyRota').addEventListener('click', generateDutyWorkspaceRota);
+
   // Staff directory search filters the currently loaded department roster.
   el('staffSearch').addEventListener('input', applyStaffSearch);
 
