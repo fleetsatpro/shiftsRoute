@@ -223,6 +223,132 @@ export default {
         return json(results);
       }
 
+      // ── Workforce administration: HR and Duty Ops workspaces ────────
+      if (pathname === '/api/workforce/overview' && request.method === 'GET') {
+        const denied = requireAnyPermission('staff.read', 'coverage.read');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY department_id, name'
+        ).all();
+        const { results: departments } = await env.DB.prepare(
+          'SELECT id, name, day_min, day_max, night_min, night_max, day_code, night_code FROM departments WHERE operational_team = 1 ORDER BY id'
+        ).all();
+        const { results: qualifications } = await env.DB.prepare(
+          'SELECT q.staff_id, q.department_id, q.can_day, q.can_night, q.priority, q.effective_from, q.effective_to, s.name AS staff_name FROM staff_department_qualifications q JOIN staff s ON s.id = q.staff_id WHERE q.effective_to IS NULL ORDER BY s.name, q.department_id'
+        ).all();
+        return json({ staff: results, departments, qualifications, role: me.role, authority_level: (await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first())?.authority_level ?? 0 });
+      }
+
+      if (pathname === '/api/workforce/qualifications' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT q.*, s.name AS staff_name, d.name AS department_name FROM staff_department_qualifications q JOIN staff s ON s.id=q.staff_id JOIN departments d ON d.id=q.department_id ORDER BY s.name, d.name, q.effective_from DESC'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/qualifications' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || typeof body.department_id !== 'string'
+          || !['0','1',0,1,false,true].includes(body.can_day)
+          || !['0','1',0,1,false,true].includes(body.can_night)
+          || !/^\\d{4}-\\d{2}-\\d{2}$/.test(body.effective_from || '')) {
+          return json({ error: 'Invalid qualification details' }, { status: 400 });
+        }
+        const staff = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const dept = await env.DB.prepare('SELECT id FROM departments WHERE id = ? AND operational_team = 1').bind(body.department_id).first();
+        if (!staff?.active || !dept) return json({ error: 'Active staff and operational department are required' }, { status: 400 });
+        const day = body.can_day === true || body.can_day === 1 || body.can_day === '1' ? 1 : 0;
+        const night = body.can_night === true || body.can_night === 1 || body.can_night === '1' ? 1 : 0;
+        if (!day && !night) return json({ error: 'At least one shift type must be enabled' }, { status: 400 });
+        await env.DB.batch([
+          env.DB.prepare('UPDATE staff_department_qualifications SET effective_to = ? WHERE staff_id = ? AND department_id = ? AND effective_to IS NULL').bind(new Date(Date.now()-86400000).toISOString().slice(0,10), body.staff_id, body.department_id),
+          env.DB.prepare('INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approved_by, approval_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(body.staff_id, body.department_id, day, night, Number.isInteger(body.priority) ? Math.max(1, Math.min(1000, body.priority)) : 100, body.effective_from, me.id, String(body.approval_note || '').slice(0,500)),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'qualification.updated', 'staff_qualification', body.staff_id + ':' + body.department_id, JSON.stringify({ department_id: body.department_id, can_day: day, can_night: night, effective_from: body.effective_from }))
+        ]);
+        return json({ ok: true }, { status: 201 });
+      }
+
+      if (pathname === '/api/workforce/duty-rota' && request.method === 'GET') {
+        const denied = requireAnyPermission('coverage.read');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          "SELECT r.*, s.name AS manager_name FROM duty_ops_assignments r JOIN staff s ON s.id=r.manager_staff_id WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month') ORDER BY r.duty_date"
+        ).bind(month + '-01', month + '-01').all();
+        return json(results);
+      }
+
+      if (pathname === '/api/workforce/duty-rota' && request.method === 'POST') {
+        const denied = requireAnyPermission('coverage.allocate');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(body.duty_date || '') || !isValidCalendarDate(body.duty_date)
+          || typeof body.manager_staff_id !== 'string'
+          || !['floating','team_cover'].includes(body.assignment_type || 'floating')) {
+          return json({ error: 'Invalid duty assignment' }, { status: 400 });
+        }
+        const manager = await env.DB.prepare("SELECT id FROM staff WHERE id = ? AND active = 1 AND role = 'duty_ops_manager'").bind(body.manager_staff_id).first();
+        if (!manager) return json({ error: 'An active Duty Ops Manager is required' }, { status: 400 });
+        const department = body.assignment_type === 'team_cover'
+          ? await env.DB.prepare("SELECT id FROM departments WHERE id = ? AND operational_team = 1").bind(body.coverage_department_id).first()
+          : null;
+        if (body.assignment_type === 'team_cover' && !department) return json({ error: 'A valid coverage department is required' }, { status: 400 });
+        const id = crypto.randomUUID();
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO duty_ops_assignments (id, duty_date, manager_staff_id, assignment_type, coverage_department_id, shift_code, reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(id, body.duty_date, body.manager_staff_id, body.assignment_type || 'floating', department?.id || null, 'MD', String(body.reason || '').slice(0,500), me.id),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'duty_rota.assigned', 'duty_ops_assignment', id, JSON.stringify({ duty_date: body.duty_date, manager_staff_id: body.manager_staff_id, assignment_type: body.assignment_type || 'floating', coverage_department_id: department?.id || null }))
+        ]);
+        return json({ id, ok: true }, { status: 201 });
+      }
+
+      if (pathname === '/api/hr/staff' && request.method === 'GET') {
+        const denied = requireAnyPermission('staff.read');
+        if (denied) return denied;
+        const { results } = await env.DB.prepare(
+          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY active DESC, department_id, name'
+        ).all();
+        return json(results);
+      }
+
+      if (pathname === '/api/hr/staff' && request.method === 'POST') {
+        const denied = requireAnyPermission('staff.lifecycle');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.name !== 'string' || body.name.trim().length < 2 || body.name.length > 120
+          || !['ISOC','SCE'].includes(body.department_id)) return json({ error: 'Valid name and operational department are required' }, { status: 400 });
+        const id = (body.id || body.name.toLowerCase().trim().replace(/\\s+/g,'-').replace(/[^a-z0-9-]/g,'')).slice(0,80);
+        if (!/^[a-z0-9_-]{1,80}$/.test(id)) return json({ error: 'Invalid staff identifier' }, { status: 400 });
+        await env.DB.batch([
+          env.DB.prepare("INSERT INTO staff (id, name, department_id, active, role, pin_set) VALUES (?, ?, ?, 1, 'staff', 0)").bind(id, body.name.trim(), body.department_id),
+          env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'allowed', 5, 11, date('now'))").bind(id),
+          env.DB.prepare('INSERT INTO staff_department_qualifications (staff_id, department_id, can_day, can_night, priority, effective_from, approved_by, approval_note) VALUES (?, ?, 1, 1, 100, date(\'now\'), ?, ?)').bind(id, body.department_id, me.id, 'HR onboarding default; confirm qualification before scheduling'),
+          env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id }))
+        ]);
+        return json({ id, ok: true }, { status: 201 });
+      }
+
+      const hrStaffMatch = pathname.match(/^\\/api\\/hr\\/staff\\/([^/]+)$/);
+      if (hrStaffMatch && request.method === 'PATCH') {
+        const denied = requireAnyPermission('staff.lifecycle');
+        if (denied) return denied;
+        const staffId = hrStaffMatch[1];
+        const body = await request.json();
+        const updates = [], binds = [];
+        if (typeof body.name === 'string' && body.name.trim().length >= 2 && body.name.length <= 120) { updates.push('name = ?'); binds.push(body.name.trim()); }
+        if (typeof body.active === 'boolean') { updates.push('active = ?'); binds.push(body.active ? 1 : 0); }
+        if (!updates.length) return json({ error: 'No valid HR fields supplied' }, { status: 400 });
+        binds.push(staffId);
+        await env.DB.prepare('UPDATE staff SET ' + updates.join(', ') + ' WHERE id = ?').bind(...binds).run();
+        if (body.active === false) await env.DB.prepare('DELETE FROM sessions WHERE staff_id = ?').bind(staffId).run();
+        await env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.hr_updated', 'staff', staffId, JSON.stringify({ name_changed: typeof body.name === 'string', active_changed: typeof body.active === 'boolean' })).run();
+        return json({ ok: true });
+      }
+
       // ── Staff ─────────────────────────────────────────────────────────
       if (pathname === '/api/staff' && request.method === 'GET') {
         const requestedDept = url.searchParams.get('department');
