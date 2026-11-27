@@ -16,7 +16,7 @@ Use explicit permission capabilities rather than checking names or relying on a 
 
 - `admin`: system-wide configuration, staff and role administration, schedule generation/publishing, exception approvals, audit access.
 - `hr`: staff lifecycle, leave/availability administration, employee records and HR reports; no authentication-secret access, no unrestricted schedule publication, and no security-policy editing.
-- `duty_ops_manager`: daily duty desk, operational coverage, cross-team allocation requests, shortage and exception review, operational handover; no user/role administration or security configuration.
+- `duty_ops_manager`: full administrative capabilities equivalent to the admin permission set, plus daily duty desk, operational coverage, cross-team allocation, shortage and exception review, and handover. DOMs are the senior operational authority over all controllers and operational staff. The system owner/admin retains top-level platform ownership and can manage platform-wide identity/security controls.
 - `technical_assistant`: technical support workspace and eligible coverage where configured; no HR or staff administration.
 - `staff`: personal roster, leave requests, shift swaps, handover notices and own profile.
 
@@ -38,13 +38,14 @@ Changes to qualifications and policies must be effective-dated so historical sch
 
 ## Initial workforce configuration requested
 
-- Griffin: system administrator.
-- Hilda and Mukasa: Duty Ops Managers; rotate daily day-duty fairly. Both may cover day shortages in ISOC or SCE when qualified and available.
+- Griffin: system administrator / platform owner.
+- Hilda and Mukasa: Duty Ops Managers with full administrative rights and senior operational authority over all controllers; rotate daily day-duty fairly. Both may cover day shortages in ISOC or SCE when qualified and available.
 - Wayne: Technical Assistant; eligible for configured cross-team shortage support. Night work is disabled by default and only possible through a recorded emergency exception with authorized approval.
-- Mercy, Cate and Oliera: ISOC staff.
+- Mercy Wanyoike: individual HR account and HR workspace; not an ISOC roster member.
+- Cate and Oliera: ISOC staff.
 - Benson and Joan: add SCE qualification for rotation/shortage support while preserving their home department.
 - David: deactivate account and remove from future eligibility; preserve historical schedule/audit references.
-- HR: create an individual HR account after the named HR employee is identified. Never create a shared generic HR credential.
+- HR: Mercy Wanyoike is the named HR account holder. Create an individual account and HR workspace; never create a shared generic HR credential.
 
 Existing Stephen and Murad administrator grants require an explicit least-privilege review. Do not silently retain or revoke either grant as a side effect of this migration.
 
@@ -74,7 +75,7 @@ The optimizer must report infeasibility and explain the smallest shortage set ra
 ## Interfaces
 
 - **Staff workspace:** simple sign-in; personal roster, leave, swaps, announcements and clear shift explanations.
-- **Duty Ops workspace:** today's duty manager, day/night coverage by team, live shortage board, cross-team support eligibility, handover and exception workflow.
+- **Duty Ops workspace:** full admin-capable command workspace for Hilda and Mukasa, today's duty manager, day/night coverage by team, live shortage board, cross-team support eligibility, handover, policy controls, approvals and exception workflow. DOMs outrank all controllers in the operational hierarchy.
 - **HR workspace:** staff lifecycle, onboarding/offboarding, leave, availability, qualification records, effective dates and HR reporting.
 - **Admin workspace:** policy/coverage configuration, role and permission management, solver controls, audit log, schedule approval and publication.
 - **Technical workspace:** service health, technical notices and eligible support assignments; no privileged HR data.
