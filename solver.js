@@ -122,6 +122,7 @@ export function generateSchedule({
     if (typeof code !== 'string' || !['D','N','DC','NC','O','T','FSA'].includes(code)) return false;
     const coverageCode = value.coverage_shift_code || code;
     const type = shiftType(coverageCode);
+    const isDayActivity = type === 'day' || code === 'T';
     if (type === 'day' && person.can_day === 0) return false;
     if (type === 'night') {
       const exception = Array.isArray(person.night_exception_dates) && person.night_exception_dates.includes(date);
@@ -130,7 +131,7 @@ export function generateSchedule({
     if (state[person.id][day] !== null) return false;
     const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
     if (isWorkCode(code)) {
-      if (nightRestRule && type === 'day' && prevType === 'night') return false;
+      if (nightRestRule && isDayActivity && prevType === 'night') return false;
       if (consecutiveWork >= (person.max_consecutive_days ?? 5)) return false;
     }
     return true;
@@ -286,7 +287,7 @@ function improveBalance({
       if (LEAVE_CODES.has(code) || !isWorkCode(code)) continue;
       const currentDate = dateStr(month, current);
       const currentCoverage = assignmentMeta[staffId]?.[currentDate]?.coverage_shift_code || code;
-      if (shiftType(currentCoverage) === 'day') {
+      if (shiftType(currentCoverage) === 'day' || code === 'T') {
         let previousType = null;
         if (current === 1) previousType = priorFinalState?.[staffId]?.lastShift || null;
         else {

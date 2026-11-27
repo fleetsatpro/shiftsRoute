@@ -225,3 +225,16 @@ test('approved leave supersedes a locked rotation rest day without a warning', (
   assert.equal(result.assignments.alpha['2026-12-05'], 'PL');
   assert.ok(!result.warnings.some(warning => warning.includes('2026-12-05')));
 });
+
+
+test('trainee day marker obeys night-to-day recovery across the month boundary', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 0, day_max: 0, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [{ id: 'trainee', name: 'Trainee', can_day: 1, can_night: 1, max_consecutive_days: 5 }],
+    priorFinalState: { trainee: { lastShift: 'night', consecutiveWork: 1 } },
+    fixedAssignments: { trainee: { '2026-12-01': { shift_code: 'T' } } },
+  });
+  assert.equal(result.assignments.trainee['2026-12-01'], 'O');
+  assert.ok(result.warnings.some(warning => warning.includes('fixed T') && warning.includes('rest policy')));
+});
