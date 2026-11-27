@@ -1,4 +1,4 @@
-import { pbkdf2Sync, randomBytes } from 'node:crypto';
+import { hashPin } from '../auth.js';
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
@@ -26,11 +26,11 @@ const demoStaff = [
   { id: 'e2e-operator', name: 'Demo Operator', role: 'staff' },
   { id: 'e2e-night', name: 'Night Controller', role: 'staff' },
 ];
-const salt = randomBytes(16).toString('hex');
-const hash = pbkdf2Sync(pin, Buffer.from(salt, 'hex'), 310000, 32, 'sha256').toString('hex');
-const values = demoStaff.map(person =>
-  `('${person.id}', '${person.name}', 'ISOC', 1, '${person.role}', '${hash}', '${salt}', 1)`
-).join(',\n');
+const credentials = await Promise.all(demoStaff.map(() => hashPin(pin)));
+const values = demoStaff.map((person, index) => {
+  const credential = credentials[index];
+  return `('${person.id}', '${person.name}', 'ISOC', 1, '${person.role}', '${credential.hash}', '${credential.salt}', 1)`;
+}).join(',\n');
 
 const sql = [
   'DELETE FROM workforce_shift_exceptions;',
