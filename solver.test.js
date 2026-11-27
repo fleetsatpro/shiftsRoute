@@ -109,3 +109,16 @@ test('exception-only night eligibility is limited to explicitly approved dates',
   const nights = Object.entries(result.assignments.wayne).filter(([, code]) => code === 'N').map(([date]) => date);
   assert.ok(nights.every(date => date === '2026-07-01'));
 });
+
+
+test('approved Duty Ops team-cover assignment is fixed in the generated roster', () => {
+  const staff = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}`, can_day: 1, can_night: 1 }));
+  const result = generateSchedule({
+    month: '2026-07',
+    department: { ...dept, day_min: 2, day_max: 2, night_min: 2, night_max: 2 },
+    staff,
+    leaveByStaff: {},
+    preassignedAssignments: { '2026-07-01': 's0' },
+  });
+  assert.equal(result.assignments.s0['2026-07-01'], 'D');
+});
