@@ -250,29 +250,40 @@ async function loadStaffTable() {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-3);">No staff found.</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map(s => `
-    <tr>
-      <td>${escHtml(s.name)}</td>
-      <td>${escHtml(s.department_id)}</td>
-      <td><span class="role-pill ${s.role === 'staff' ? 'staff-role' : ''}">${escHtml(s.role)}</span></td>
-      <td><span class="pin-status ${s.pin_set ? 'set' : 'unset'}">${s.pin_set ? '● Set' : '○ Not set'}</span></td>
-      <td style="display:flex;gap:6px;">
-        ${s.id !== state.me.id
-          ? `<button class="ghost" style="font-size:11px;padding:4px 8px;" onclick="resetPin('${s.id}', '${escHtml(s.name)}')">Reset PIN</button>`
-          : ''}
-        ${s.role === 'staff'
-          ? `<button class="ghost" style="font-size:11px;padding:4px 8px;" onclick="makeAdmin('${s.id}', '${escHtml(s.name)}')">Make admin</button>`
-          : s.id !== state.me.id ? `<button class="ghost" style="font-size:11px;padding:4px 8px;" onclick="makeStaff('${s.id}', '${escHtml(s.name)}')">Revoke admin</button>` : ''}
-        ${s.id !== state.me.id
-          ? `<button class="danger" style="font-size:11px;padding:4px 8px;" onclick="deactivateStaff('${s.id}', '${escHtml(s.name)}')">Deactivate</button>`
-          : ''}
-      </td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = rows.map(s => {
+    const id = escHtml(s.id);
+    const name = escHtml(s.name);
+    const actions = [];
+    if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="reset-pin" data-staff-id="${id}" data-staff-name="${name}">Reset PIN</button>`);
+    if (s.role === 'staff') actions.push(`<button type="button" class="ghost" data-action="make-admin" data-staff-id="${id}" data-staff-name="${name}">Make admin</button>`);
+    else if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="make-staff" data-staff-id="${id}" data-staff-name="${name}">Revoke admin</button>`);
+    if (s.id !== state.me.id) actions.push(`<button type="button" class="danger" data-action="deactivate" data-staff-id="${id}" data-staff-name="${name}">Deactivate</button>`);
+    return `
+      <tr>
+        <td>${name}</td>
+        <td>${escHtml(s.department_id)}</td>
+        <td><span class="role-pill ${s.role === 'staff' ? 'staff-role' : ''}">${escHtml(s.role)}</span></td>
+        <td><span class="pin-status ${s.pin_set ? 'set' : 'unset'}">${s.pin_set ? '● Set' : '○ Not set'}</span></td>
+        <td class="staff-actions">${actions.join('')}</td>
+      </tr>`;
+  }).join('');
 }
 
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeShiftCode(value) {
+  return ['D', 'N', 'DC', 'NC', 'O', 'L'].includes(value) ? value : 'O';
+}
+
+function safeStatus(value) {
+  return ['draft', 'published', 'pending', 'approved', 'rejected'].includes(value) ? value : 'unknown';
 }
 
 // ── Actions ───────────────────────────────────────────────
@@ -587,17 +598,17 @@ function renderMine() {
     if (filter === 'working' && !isWorking) continue;
     if (filter === 'off'     && (isWorking || isLeave)) continue;
 
-    const coworkers = coworkers_by_date[ds];
-    const badge = code.startsWith('D') ? 'c-day' : code.startsWith('N') ? 'c-night' : code === 'L' ? 'c-leave' : 'c-off';
-    const coText = coworkers?.length
-      ? `With <b>${coworkers.join(', ')}</b>`
+    const coworkers = Array.isArray(coworkers_by_date[ds]) ? coworkers_by_date[ds] : [];
+    const safeCode = safeShiftCode(code);
+    const coText = coworkers.length
+      ? `With <b>${coworkers.map(escHtml).join(', ')}</b>`
       : isWorking ? 'Solo coverage' : '';
 
     html += `
       <div class="my-shift-row ${isWorking || isLeave ? 'working' : ''}">
         <span class="shift-date">${friendlyDate(ds)}</span>
-        <span class="code-badge cell shift-${code}">${code}</span>
-        <span class="shift-detail">${SHIFT_LABEL[code]}${coText ? ' · ' + coText : ''}</span>
+        <span class="code-badge cell shift-${safeCode}">${safeCode}</span>
+        <span class="shift-detail">${escHtml(SHIFT_LABEL[safeCode] || safeCode)}${coText ? ' · ' + coText : ''}</span>
       </div>`;
   }
   list.innerHTML = html || `<div style="grid-column:1/-1;color:var(--text-3);padding:20px;font-size:12px;">No shifts match this filter.</div>`;
@@ -630,21 +641,23 @@ function renderSwaps() {
   const isAdmin = state.me.role === 'admin';
   container.innerHTML = state.swaps.map(s => {
     const isMine = s.from_staff_id === state.me.id;
-    const adminBtns = isAdmin && s.status === 'pending'
-      ? `<button class="primary" style="font-size:11px;padding:4px 10px;" onclick="approveSwap('${s.id}')">Approve</button>
-         <button class="danger"  style="font-size:11px;padding:4px 10px;" onclick="rejectSwap('${s.id}')">Reject</button>`
+    const id = escHtml(s.id);
+    const status = safeStatus(s.status);
+    const shiftCode = safeShiftCode(s.shift_code);
+    const actionBtn = (action, label, variant) =>
+      `<button type="button" class="${variant}" data-action="${action}" data-swap-id="${id}">${label}</button>`;
+    const adminBtns = isAdmin && status === 'pending'
+      ? actionBtn('approve-swap', 'Approve', 'primary') + actionBtn('reject-swap', 'Reject', 'danger')
       : '';
-    const cancelBtn = isMine && s.status === 'pending'
-      ? `<button class="ghost" style="font-size:11px;padding:4px 10px;" onclick="cancelSwap('${s.id}')">Cancel</button>`
-      : '';
+    const cancelBtn = isMine && status === 'pending' ? actionBtn('cancel-swap', 'Cancel', 'ghost') : '';
     return `
       <div class="swap-row">
-        <span class="swap-status ${s.status}">${s.status}</span>
+        <span class="swap-status ${status}">${status}</span>
         <span class="swap-detail">
           <b>${escHtml(s.from_name)}</b> → <b>${escHtml(s.to_name)}</b> ·
-          ${friendlyDate(s.date)} · <span class="mono">${s.shift_code}</span>
+          ${escHtml(friendlyDate(s.date))} · <span class="mono">${shiftCode}</span>
         </span>
-        <div style="display:flex;gap:6px;">${adminBtns}${cancelBtn}</div>
+        <div class="swap-actions">${adminBtns}${cancelBtn}</div>
       </div>`;
   }).join('');
 }
@@ -656,10 +669,10 @@ function renderLeaveList() {
   const staffById = Object.fromEntries(state.staff.map(s => [s.id, s.name]));
   el('leaveList').innerHTML = filtered.map(l => `
     <span class="leave-chip">
-      <b>${escHtml(staffById[l.staff_id] || l.staff_id)}</b> · ${l.date}
-      <button class="rm-leave" title="Remove leave" onclick="removeLeave('${l.id}')">×</button>
+      <b>${escHtml(staffById[l.staff_id] || l.staff_id)}</b> · ${escHtml(l.date)}
+      <button type="button" class="rm-leave" title="Remove leave" aria-label="Remove leave for ${escHtml(staffById[l.staff_id] || l.staff_id)}" data-action="remove-leave" data-leave-id="${escHtml(l.id)}">×</button>
     </span>
-  `).join('') || '<span style="color:var(--text-3);font-size:12px;font-family:var(--font-mono);">No leave on file for this month.</span>';
+  `).join('') || '<span class="muted">No leave on file for this month.</span>';
 }
 
 // ── Team grid render ───────────────────────────────────────
