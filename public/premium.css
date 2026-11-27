@@ -294,6 +294,8 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 }
 .theme-control select { min-height:32px; padding:5px 26px 5px 9px; }
 @media (max-width:768px) {
+  /* Keep keyboard/skip-link focus targets clear of the sticky header and nav. */
+  #mainContent { scroll-margin-top: 124px; }
   .controls-bar { gap:8px; padding:10px; border-radius:12px; }
   .controls-bar .ctrl-group { flex:1 1 auto; }
   .controls-bar .ctrl-group input, .controls-bar .ctrl-group select { min-width:0; max-width:100%; }
