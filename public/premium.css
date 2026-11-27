@@ -1,0 +1,145 @@
+/* ShiftsRoute premium interface refinement — layered over the semantic base styles. */
+:root {
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --shadow-card: 0 10px 34px rgba(0, 0, 0, .26), inset 0 1px 0 rgba(255,255,255,.035);
+  --surface-glass: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+html { scroll-behavior: smooth; }
+body {
+  background:
+    radial-gradient(ellipse at 12% -12%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42rem),
+    radial-gradient(ellipse at 92% 18%, rgba(112, 92, 255, .10), transparent 36rem),
+    linear-gradient(155deg, var(--bg-2), var(--bg) 48%, #070b14);
+  background-attachment: fixed;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  opacity: .13;
+  background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+}
+header {
+  background: color-mix(in srgb, var(--bg-2) 78%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+  backdrop-filter: blur(20px) saturate(145%);
+  box-shadow: 0 8px 28px rgba(0,0,0,.16);
+}
+.wordmark { text-shadow: 0 0 22px color-mix(in srgb, var(--accent) 34%, transparent); }
+aside {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 72%, transparent), color-mix(in srgb, var(--bg) 88%, transparent));
+  border-right-color: color-mix(in srgb, var(--accent) 13%, var(--border));
+  backdrop-filter: blur(18px);
+}
+main { max-width: 1760px; }
+.page-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.page-title h1 {
+  letter-spacing: -.045em;
+  font-size: clamp(22px, 2.2vw, 30px);
+  font-weight: 650;
+  line-height: 1.12;
+  text-shadow: 0 4px 24px rgba(0,0,0,.22);
+}
+.page-sub { letter-spacing: .01em; }
+.panel {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--border-2));
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, white 6%), color-mix(in srgb, var(--bg-2) 96%, transparent));
+  box-shadow: var(--shadow-card);
+  transition: border-color .24s ease, box-shadow .24s ease, transform .24s ease;
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 65%, white), transparent);
+  opacity: .48;
+  pointer-events: none;
+}
+.panel-header {
+  min-height: 62px;
+  padding: 15px 20px;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--panel-2) 74%, transparent), color-mix(in srgb, var(--panel) 70%, transparent));
+  border-bottom-color: color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+.panel-header h2 {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .13em;
+}
+.panel-actions { gap: 10px; }
+button, input, select { transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease; }
+button { border-radius: 9px; font-weight: 600; }
+button.primary {
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--accent) 16%, transparent), inset 0 1px 0 rgba(255,255,255,.14);
+}
+button.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 24%, transparent); }
+button.ghost:hover:not(:disabled), button.danger:hover:not(:disabled) { transform: translateY(-1px); }
+input, select {
+  border-radius: 9px;
+  background-color: color-mix(in srgb, var(--panel-2) 88%, transparent);
+}
+input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible, .nav-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.staff-table { border-collapse: separate; border-spacing: 0; min-width: 720px; }
+.staff-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--panel-2) 96%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 17%, var(--border-2));
+}
+.staff-table tbody tr { transition: background .18s ease; }
+.staff-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.staff-table td, .staff-table th { padding: 13px 16px; }
+.staff-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.staff-actions button { min-height: 32px; padding: 6px 10px; font-size: 11px; }
+#staffSearch { min-width: min(260px, 42vw); }
+.metric-card {
+  border-radius: 15px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 92%, white 8%), color-mix(in srgb, var(--panel-2) 80%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border-2));
+  box-shadow: 0 8px 24px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.045);
+  transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
+}
+.metric-card:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 44%, var(--border-2)); box-shadow: 0 14px 30px rgba(0,0,0,.25), 0 0 24px color-mix(in srgb, var(--accent) 9%, transparent); }
+.nav-btn { border-radius: 0 10px 10px 0; margin-right: 8px; width: calc(100% - 8px); transition: background .2s ease, color .2s ease, padding-left .2s ease; }
+.nav-btn:hover { padding-left: 20px; }
+.nav-btn.active { box-shadow: inset 0 0 24px color-mix(in srgb, var(--accent) 8%, transparent); }
+.modal { border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-2)); border-radius: 18px; box-shadow: 0 28px 90px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06); }
+@media (max-width: 768px) {
+  header { padding-inline: 14px; gap: 8px; }
+  .header-right { gap: 7px; font-size: 11px; }
+  .user-chip { max-width: 40vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  main { padding: 20px 14px 100px; }
+  .page-title { margin-bottom: 16px; gap: 7px; }
+  .panel { border-radius: 13px; }
+  .panel-header { padding: 13px 14px; align-items: flex-start; }
+  .panel-actions { flex-wrap: wrap; justify-content: flex-end; }
+  #staffSearch { min-width: 0; width: min(100%, 220px); }
+  .staff-table td, .staff-table th { padding: 12px 13px; }
+  .mobile-nav { backdrop-filter: blur(20px) saturate(150%); background: color-mix(in srgb, var(--bg-2) 82%, transparent); border-top-color: color-mix(in srgb, var(--accent) 20%, var(--border)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
