@@ -367,7 +367,7 @@ export default {
         const denied = requireAnyPermission('staff.read', 'coverage.read');
         if (denied) return denied;
         const { results } = await env.DB.prepare(
-          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY department_id, name'
+          'SELECT id, name, department_id, role, active, pin_set, employment_end_date FROM staff ORDER BY department_id, name'
         ).all();
         const { results: departments } = await env.DB.prepare(
           'SELECT id, name, day_min, day_max, night_min, night_max, day_code, night_code FROM departments WHERE operational_team = 1 ORDER BY id'
@@ -778,7 +778,7 @@ export default {
         const denied = requireAnyPermission('staff.read');
         if (denied) return denied;
         const { results } = await env.DB.prepare(
-          'SELECT id, name, department_id, role, active, pin_set FROM staff ORDER BY active DESC, department_id, name'
+          'SELECT id, name, department_id, role, active, pin_set, employment_end_date FROM staff ORDER BY active DESC, department_id, name'
         ).all();
         return json(results);
       }
