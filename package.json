@@ -8,6 +8,7 @@
     "deploy": "wrangler deploy",
     "deploy:shiftsroutes": "wrangler deploy --config wrangler.shiftsroutes.toml",
     "test": "node --test",
+    "test:e2e": "playwright test",
     "db:migrate:local": "wrangler d1 migrations apply raw-ter-shift --local",
     "db:migrate:preview": "wrangler d1 migrations apply raw-ter-shift-preview --remote --config wrangler.routesa.preview.toml",
     "db:migrate:remote": "wrangler d1 migrations apply raw-ter-shift --remote --config wrangler.toml"
