@@ -51,7 +51,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const enrollmentHash = createHash('sha256').update(enrollmentCode).digest('hex');
     wrangler([
       'd1', 'execute', database, '--local', '--command',
-      `UPDATE staff SET enrollment_hash = '${enrollmentHash}' WHERE id = 'stephen' AND pin_set = 0;`,
+      `UPDATE staff SET enrollment_hash = '${enrollmentHash}' WHERE id = 'charles' AND pin_set = 0;`,
     ], persistDir);
 
     worker = spawn('npx', [
@@ -69,12 +69,12 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const peopleResponse = await fetch(baseUrl + '/api/auth/people');
     assert.equal(peopleResponse.status, 200);
     const people = await peopleResponse.json();
-    assert.ok(people.some(person => person.id === 'stephen' && person.pin_set === 0));
+    assert.ok(people.some(person => person.id === 'charles' && person.pin_set === 0));
 
     const enroll = await fetch(baseUrl + '/api/auth/set-pin', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ staff_id: 'stephen', pin: '483920', enrollment_code: enrollmentCode }),
+      body: JSON.stringify({ staff_id: 'charles', pin: '483920', enrollment_code: enrollmentCode }),
     });
     assert.equal(enroll.status, 201, await enroll.clone().text());
     const sessionCookie = enroll.headers.get('set-cookie')?.split(';')[0];
@@ -82,7 +82,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
 
     const me = await fetch(baseUrl + '/api/auth/me', { headers: { cookie: sessionCookie } });
     assert.equal(me.status, 200);
-    assert.equal((await me.json()).id, 'stephen');
+    assert.equal((await me.json()).id, 'charles');
 
     const scopedStaff = await fetch(baseUrl + '/api/staff?department=ISOC', { headers: { cookie: sessionCookie } });
     assert.equal(scopedStaff.status, 200);
@@ -98,14 +98,14 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const badLogin = await fetch(baseUrl + '/api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ staff_id: 'stephen', pin: '000000' }),
+      body: JSON.stringify({ staff_id: 'charles', pin: '000000' }),
     });
     assert.equal(badLogin.status, 401);
 
     const goodLogin = await fetch(baseUrl + '/api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ staff_id: 'stephen', pin: '483920' }),
+      body: JSON.stringify({ staff_id: 'charles', pin: '483920' }),
     });
     assert.equal(goodLogin.status, 200);
     const freshCookie = goodLogin.headers.get('set-cookie')?.split(';')[0];
