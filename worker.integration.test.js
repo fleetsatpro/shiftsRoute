@@ -94,14 +94,20 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     assert.equal(scopedStaff.status, 200);
     const staffRows = await scopedStaff.json();
     assert.ok(staffRows.length >= 10);
-    assert.ok(staffRows.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(staffRows.every(person => ['ISOC','SCE','ROC'].includes(person.department_id)));
     assert.ok(staffRows.some(person => person.id === 'mukasa' && person.department_id === 'ROC'));
+    assert.ok(staffRows.some(person => person.id === 'chebet' && person.department_id === 'SCE'),
+      'SCE members are discoverable in the ISOC team as relief-only qualified staff');
+    assert.ok(staffRows.some(person => person.id === 'murad' && person.department_id === 'SCE'),
+      'all active SCE members are cross-qualified for ISOC absolute-need relief');
 
     const deniedCrossDepartment = await fetch(baseUrl + '/api/staff?department=SCE', { headers: { cookie: sessionCookie } });
     assert.equal(deniedCrossDepartment.status, 200);
     const ownScope = await deniedCrossDepartment.json();
-    assert.ok(ownScope.every(person => ['ISOC','ROC'].includes(person.department_id)));
+    assert.ok(ownScope.every(person => ['ISOC','SCE','ROC'].includes(person.department_id)));
     assert.ok(ownScope.some(person => person.id === 'mukasa'), 'cross-qualified Duty Ops Manager should be visible in ISOC roster');
+    assert.ok(ownScope.some(person => person.id === 'moreen' && person.department_id === 'SCE'),
+      'staff remain in their home department while appearing as relief-qualified in the ISOC team');
 
     const badLogin = await fetch(baseUrl + '/api/auth/login', {
       method: 'POST',
