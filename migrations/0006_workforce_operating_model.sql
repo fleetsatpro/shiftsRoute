@@ -147,6 +147,7 @@ UPDATE staff SET role = 'admin', name = 'Griffin' WHERE id = 'griffin';
 UPDATE staff SET role = 'duty_ops_manager' WHERE id = 'hilda';
 UPDATE staff SET role = 'technical_assistant' WHERE id = 'wayne';
 UPDATE staff SET active = 0 WHERE id = 'david';
+DELETE FROM sessions WHERE staff_id = 'david';
 
 INSERT OR IGNORE INTO staff (id, name, department_id, active, role, pin_set)
 VALUES
@@ -209,6 +210,10 @@ CREATE TABLE IF NOT EXISTS workforce_audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_workforce_audit_created ON workforce_audit_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_workforce_audit_entity ON workforce_audit_events(entity_type, entity_id);
+INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json)
+SELECT 'griffin', 'staff.deactivated', 'staff', 'david', '{"reason":"Employment ended; retained for historical records"}'
+WHERE EXISTS (SELECT 1 FROM staff WHERE id='griffin')
+  AND EXISTS (SELECT 1 FROM staff WHERE id='david');
 
 CREATE TABLE IF NOT EXISTS workforce_shift_exceptions (
   id TEXT PRIMARY KEY,
