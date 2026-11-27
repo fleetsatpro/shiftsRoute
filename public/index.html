@@ -1137,6 +1137,20 @@
   </div>
 </div>
 
+<!-- One-time enrollment code modal -->
+<div id="enrollmentCodeModal" class="modal-backdrop hidden">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="enrollmentCodeTitle">
+    <h3 id="enrollmentCodeTitle">One-time enrollment code</h3>
+    <p class="muted">Share this code with the staff member through a secure channel. It is displayed only once.</p>
+    <label for="enrollmentCodeValue">Enrollment code</label>
+    <input id="enrollmentCodeValue" type="text" readonly autocomplete="off" spellcheck="false" />
+    <div class="modal-actions">
+      <button id="copyEnrollmentCode" type="button" class="ghost">Copy code</button>
+      <button id="closeEnrollmentCode" type="button" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- New Swap Request modal -->
 <div id="newSwapModal" class="modal-backdrop hidden">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="newSwapTitle">
