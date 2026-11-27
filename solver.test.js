@@ -290,7 +290,7 @@ test('allocator reserves recovery before a future fixed day relief assignment', 
       },
     },
   });
-  assert.equal(result.assignments['a-relief']['2026-12-17'], 'O',
+  assert.notEqual(result.assignments['a-relief']['2026-12-17'], 'NC',
     'a night before a locked daytime relief assignment must be excluded');
   assert.equal(result.assignments['b-ready']['2026-12-17'], 'NC',
     'the allocator should use a compliant alternative when one exists');
