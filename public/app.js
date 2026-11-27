@@ -587,7 +587,7 @@ async function cancelSwap(id) {
 // ── Workforce workspaces ──────────────────────────────────
 async function loadHRWorkspace() {
   const month = el('month')?.value || todayMonth();
-  const [staff, qualifications, leave, overview, policies, markers] = await Promise.all([
+  const [staff, qualifications, leave, overview, policies, markers, rotationPatterns] = await Promise.all([
     api('/hr/staff'),
     api('/workforce/qualifications'),
     api('/leave?month=' + encodeURIComponent(month)),
