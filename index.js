@@ -1144,7 +1144,7 @@ export default {
         if (!dept) return json({ error: 'Unknown department' }, { status: 404 });
 
         const { results: staffRows } = await env.DB.prepare(
-          "SELECT s.id, s.name, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(q.relief_only,0) AS relief_only, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND COALESCE(q.relief_only,0)=0 AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=s.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?)) ORDER BY s.name"
+          "SELECT s.id, s.name, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(q.relief_only,0) AS relief_only, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND COALESCE(q.relief_only,0)=0 AND s.role <> 'duty_ops_manager' AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=s.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?)) ORDER BY s.name"
         ).bind(department_id, month + '-31', month + '-01', month + '-31', month + '-01').all();
 
         const fixedAssignments = Object.create(null);
@@ -1189,8 +1189,35 @@ export default {
           };
         }
 
+        const { results: dutyAssignments } = await env.DB.prepare(
+          "SELECT duty_date, manager_staff_id FROM duty_ops_assignments WHERE coverage_department_id = ? AND duty_date >= ? AND duty_date < date(?, '+1 month') AND status IN ('assigned','confirmed') AND manager_staff_id IS NOT NULL"
+        ).bind(department_id, month + '-01', month + '-01').all();
+        const managersAdded = new Set();
+        for (const duty of dutyAssignments) {
+          if (staffRows.some(person => person.id === duty.manager_staff_id) || managersAdded.has(duty.manager_staff_id)) continue;
+          const manager = await env.DB.prepare(
+            "SELECT s.id, s.name, q.can_day, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days " +
+            "FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id " +
+            "LEFT JOIN staff_shift_policies p ON p.staff_id=s.id " +
+            "WHERE s.id=? AND s.role='duty_ops_manager' AND s.active=1 AND q.department_id=? " +
+            "AND q.can_day=1 AND q.effective_from<=? AND (q.effective_to IS NULL OR q.effective_to>=?) " +
+            "ORDER BY q.effective_from DESC LIMIT 1"
+          ).bind(duty.manager_staff_id, department_id, duty.duty_date, duty.duty_date).first();
+          if (!manager) {
+            return json({
+              error: 'Duty Ops team-cover assignment for ' + duty.manager_staff_id + ' on ' + duty.duty_date +
+                ' has no effective day qualification for ' + department_id + '; correct the rota before generating this schedule',
+            }, { status: 409 });
+          }
+          staffRows.push({
+            id: manager.id, name: manager.name, can_day: manager.can_day, can_night: 0,
+            max_consecutive_days: manager.max_consecutive_days, relief_only: 1,
+            night_exception_dates: [],
+          });
+          managersAdded.add(manager.id);
+        }
         if (staffRows.length === 0) {
-          return json({ error: 'No active primary staff or approved relief allocations in this department' }, { status: 400 });
+          return json({ error: 'No active primary staff, approved relief or Duty Ops team-cover assignments in this department' }, { status: 400 });
         }
         const { results: approvedExceptions } = await env.DB.prepare(
           "SELECT staff_id, date FROM workforce_shift_exceptions WHERE status = 'approved' AND shift_code IN ('N','NC') AND date LIKE ?"
@@ -1223,9 +1250,6 @@ export default {
         }
 
         const priorFinalState = await getPriorFinalState(env.DB, month, department_id, staffRows, dept);
-        const { results: dutyAssignments } = await env.DB.prepare(
-          "SELECT duty_date, manager_staff_id FROM duty_ops_assignments WHERE coverage_department_id = ? AND duty_date >= ? AND duty_date < date(?, '+1 month') AND status IN ('assigned','confirmed') AND manager_staff_id IS NOT NULL"
-        ).bind(department_id, month + '-01', month + '-01').all();
         const preassignedAssignments = Object.fromEntries(dutyAssignments.map(row => [row.duty_date, row.manager_staff_id]));
 
         const { assignments, assignmentMeta, warnings, totals } = generateSchedule({
