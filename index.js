@@ -278,9 +278,41 @@ export default {
         const month = url.searchParams.get('month');
         if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
         const { results } = await env.DB.prepare(
-          "SELECT r.*, s.name AS manager_name FROM duty_ops_assignments r JOIN staff s ON s.id=r.manager_staff_id WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month') ORDER BY r.duty_date"
+          "SELECT r.*, s.name AS manager_name FROM duty_ops_assignments r LEFT JOIN staff s ON s.id=r.manager_staff_id WHERE r.duty_date >= ? AND r.duty_date < date(?, '+1 month') ORDER BY r.duty_date"
         ).bind(month + '-01', month + '-01').all();
         return json(results);
+      }
+
+      if (pathname === '/api/workforce/duty-rota/generate' && request.method === 'POST') {
+        const denied = requireAnyPermission('coverage.allocate');
+        if (denied) return denied;
+        const body = await request.json();
+        if (!isValidMonth(body.month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const [year, monthNumber] = body.month.split('-').map(Number);
+        const days = new Date(year, monthNumber, 0).getDate();
+        const managers = await env.DB.prepare("SELECT id, name FROM staff WHERE active = 1 AND role = 'duty_ops_manager' ORDER BY id").all();
+        if (!managers.results.length) return json({ error: 'No active Duty Ops Managers are configured' }, { status: 409 });
+        const { results: leaveRows } = await env.DB.prepare("SELECT staff_id, date FROM leave_requests WHERE status = 'approved' AND date >= ? AND date < date(?, '+1 month')").bind(body.month + '-01', body.month + '-01').all();
+        const { results: assignedRows } = await env.DB.prepare("SELECT a.staff_id, a.date FROM shift_assignments a JOIN schedules s ON s.id=a.schedule_id WHERE a.date >= ? AND a.date < date(?, '+1 month') AND a.shift_code NOT IN ('O','L')").bind(body.month + '-01', body.month + '-01').all();
+        const leave = new Set(leaveRows.map(row => row.staff_id + ':' + row.date));
+        const occupied = new Set(assignedRows.map(row => row.staff_id + ':' + row.date));
+        const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
+        const counts = new Map(managers.results.map(manager => [manager.id, priorRows.find(row => row.manager_staff_id === manager.id)?.total || 0]));
+        const statements = [];
+        const exceptions = [];
+        for (let day = 1; day <= days; day++) {
+          const date = body.month + '-' + String(day).padStart(2, '0');
+          const eligible = managers.results.filter(manager => !leave.has(manager.id + ':' + date) && !occupied.has(manager.id + ':' + date));
+          eligible.sort((a,b) => (counts.get(a.id) - counts.get(b.id)) || a.id.localeCompare(b.id));
+          const chosen = eligible[0] || null;
+          if (chosen) counts.set(chosen.id, (counts.get(chosen.id) || 0) + 1);
+          else exceptions.push(date);
+          const id = crypto.randomUUID();
+          statements.push(env.DB.prepare("INSERT INTO duty_ops_assignments (id, duty_date, manager_staff_id, assignment_type, coverage_department_id, shift_code, reason, status, created_by) VALUES (?, ?, ?, 'floating', NULL, 'MD', ?, ?, ?) ON CONFLICT(duty_date) DO UPDATE SET manager_staff_id=excluded.manager_staff_id, assignment_type='floating', coverage_department_id=NULL, reason=excluded.reason, status=excluded.status, created_by=excluded.created_by").bind(id, date, chosen?.id || null, chosen ? 'Fairness-balanced monthly rota' : 'No Duty Ops Manager available; manual resolution required', chosen ? 'assigned' : 'exception', me.id));
+          statements.push(env.DB.prepare("INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)").bind(me.id, chosen ? 'duty_rota.generated' : 'duty_rota.uncovered', 'duty_ops_assignment', date, JSON.stringify({ manager_staff_id: chosen?.id || null, month: body.month })));
+        }
+        if (statements.length) await env.DB.batch(statements);
+        return json({ ok: true, month: body.month, assigned_days: days - exceptions.length, uncovered_dates: exceptions });
       }
 
       if (pathname === '/api/workforce/duty-rota' && request.method === 'POST') {
