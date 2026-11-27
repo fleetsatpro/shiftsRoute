@@ -524,23 +524,30 @@ export default {
         if (request.method === 'PATCH') {
           const denied = requireAdmin();
           if (denied) return denied;
+          const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+          if (!target) return json({ error: 'Staff account not found' }, { status: 404 });
+          const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+          const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
+          if (me.role !== 'admin' && (targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) {
+            return json({ error: 'You cannot modify an account at or above your authority level' }, { status: 403 });
+          }
           const body = await request.json();
           const updates = [];
           const binds = [];
           if (body.name) { updates.push('name = ?'); binds.push(body.name); }
           if (body.role && ['admin', 'duty_ops_manager', 'hr', 'technical_assistant', 'staff'].includes(body.role)) {
-            const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
-            const targetLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target?.role || 'staff').first();
             const nextLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(body.role).first();
-            const actorLevel = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(me.role).first();
-            if (me.role !== 'admin' && ((targetLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0) || (nextLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0))) {
-              return json({ error: 'You cannot change an account at or above your authority level' }, { status: 403 });
+            if (me.role !== 'admin' && (nextLevel?.authority_level ?? 0) >= (actorLevel?.authority_level ?? 0)) {
+              return json({ error: 'You cannot grant authority at or above your own level' }, { status: 403 });
             }
             updates.push('role = ?'); binds.push(body.role);
           }
           if (updates.length === 0) return json({ error: 'Nothing to update' }, { status: 400 });
           binds.push(staffId);
-          await env.DB.prepare(`UPDATE staff SET ${updates.join(', ')} WHERE id = ?`).bind(...binds).run();
+          await env.DB.batch([
+            env.DB.prepare(`UPDATE staff SET ${updates.join(', ')} WHERE id = ?`).bind(...binds),
+            env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, body.role ? 'staff.role_updated' : 'staff.profile_updated', 'staff', staffId, JSON.stringify({ role: body.role || null, name_changed: typeof body.name === 'string' }))
+          ]);
           return json({ updated: true });
         }
         if (request.method === 'DELETE') {
