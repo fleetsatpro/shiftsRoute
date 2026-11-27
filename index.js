@@ -713,8 +713,17 @@ export default {
         ).bind(department_id, month + '-31', month + '-01').all();
 
         if (staffRows.length === 0) {
-          return json({ error: 'No active staff in this department' }, { status: 400 });
+          return json({ error: 'No active qualified staff in this department' }, { status: 400 });
         }
+        const { results: approvedExceptions } = await env.DB.prepare(
+          "SELECT staff_id, date FROM workforce_shift_exceptions WHERE status = 'approved' AND shift_code IN ('N','NC') AND date LIKE ?"
+        ).bind(month + '-%').all();
+        const exceptionDates = new Map();
+        for (const exception of approvedExceptions) {
+          if (!exceptionDates.has(exception.staff_id)) exceptionDates.set(exception.staff_id, []);
+          exceptionDates.get(exception.staff_id).push(exception.date);
+        }
+        for (const person of staffRows) person.night_exception_dates = exceptionDates.get(person.id) || [];
 
         const { results: leaveRows } = await env.DB.prepare(
           `SELECT staff_id, date FROM leave_requests
