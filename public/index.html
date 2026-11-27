@@ -880,7 +880,7 @@
 </div>
 
 <!-- Login screen -->
-<div id="loginScreen" class="login-wrap">
+<div id="loginScreen" class="login-wrap" role="main">
   <div class="login-card">
     <div class="login-logo">ROC&nbsp;SHIFT&nbsp;SCHEDULER</div>
     <div class="login-sub">ISOC &amp; SCE/SCM Desk · Operations Centre</div>
@@ -1116,16 +1116,16 @@
 
 <!-- Add Staff modal -->
 <div id="addStaffModal" class="modal-backdrop hidden">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addStaffTitle">
     <h3 id="addStaffTitle">Add Staff Member</h3>
-    <label>Full name</label>
+    <label for="newStaffName">Full name</label>
     <input type="text" id="newStaffName" placeholder="e.g. Jane Doe" />
-    <label>Department</label>
+    <label for="newStaffDept">Department</label>
     <select id="newStaffDept">
       <option value="ISOC">ISOC</option>
       <option value="SCE">SCE / SCM Desk</option>
     </select>
-    <label>Role</label>
+    <label for="newStaffRole">Role</label>
     <select id="newStaffRole">
       <option value="staff">Staff</option>
       <option value="admin">Admin (Scheduler)</option>
@@ -1139,7 +1139,7 @@
 
 <!-- New Swap Request modal -->
 <div id="newSwapModal" class="modal-backdrop hidden">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="newSwapTitle">
     <h3 id="newSwapTitle">Request Shift Swap</h3>
     <label for="swapDate">Your shift date</label>
     <input type="date" id="swapDate" />
