@@ -316,10 +316,19 @@ export default {
             "AND ((coverage_department_id=? AND coverage_shift_code=?) OR (coverage_department_id IS NULL AND shift_code=?)) " +
             "AND shift_code NOT IN ('O','L','PL','ML','SL')"
           ).bind(baseline.id, duty_date, target_department_id, shift_code, shift_code).first();
-          const covered = Number(count?.covered || 0);
+          const scheduled = Number(count?.covered || 0);
+          const planned = await env.DB.prepare(
+            "SELECT COUNT(*) AS planned FROM workforce_relief_assignments r " +
+            "WHERE r.target_department_id=? AND r.duty_date=? AND r.shift_code=? " +
+            "AND r.status IN ('pending','approved') AND r.id != COALESCE(?, '') " +
+            "AND NOT EXISTS (SELECT 1 FROM shift_assignments sa WHERE sa.schedule_id=? " +
+            "AND sa.staff_id=r.staff_id AND sa.date=r.duty_date " +
+            "AND sa.coverage_department_id=r.target_department_id AND sa.coverage_shift_code=r.shift_code)"
+          ).bind(target_department_id, duty_date, shift_code, ignoreId, baseline.id).first();
+          const covered = scheduled + Number(planned?.planned || 0);
           const minimum = Number(isNight ? targetDepartment.night_min : targetDepartment.day_min);
           if (!Number.isFinite(minimum) || covered >= minimum) {
-            return { ok: false, status: 409, error: 'The receiving desk already meets its minimum for this shift; cross-team relief is not justified' };
+            return { ok: false, status: 409, error: 'The receiving desk already meets its minimum for this shift, including other pending/approved relief; cross-team relief is not justified' };
           }
           shortage = { covered, minimum };
         }
