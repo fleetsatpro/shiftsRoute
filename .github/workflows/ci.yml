@@ -18,4 +18,6 @@ jobs:
       - run: node --check solver.js
       - run: node --check auth.js
       - run: node --check helpers.js
+      - run: node --check public/app.js
+      - run: node --check public/ui-utils.js
       - run: npm test
