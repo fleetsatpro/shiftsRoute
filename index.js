@@ -649,7 +649,7 @@ export default {
         if (!dept) return json({ error: 'Unknown department' }, { status: 404 });
 
         const { results: staffRows } = await env.DB.prepare(
-          "SELECT DISTINCT s.id, s.name, q.can_day, q.can_night FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) ORDER BY s.name"
+          "SELECT DISTINCT s.id, s.name, q.can_day, CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, COALESCE(p.max_consecutive_days,5) AS max_consecutive_days FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id LEFT JOIN staff_shift_policies p ON p.staff_id=s.id WHERE q.department_id = ? AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) ORDER BY s.name"
         ).bind(department_id, month + '-31', month + '-01').all();
 
         if (staffRows.length === 0) {
@@ -735,9 +735,10 @@ export default {
           `SELECT sa.staff_id, st.name AS staff_name, sa.date, sa.shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id
-           WHERE sa.schedule_id = ? AND st.department_id = ?
+           JOIN staff_department_qualifications q ON q.staff_id = st.id AND q.department_id = ?
+           WHERE sa.schedule_id = ? AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?)
            ORDER BY sa.date, st.name`
-        ).bind(id, me.department_id).all();
+        ).bind(schedule.department_id, id, schedule.month + '-31', schedule.month + '-01').all();
 
         const myShifts = {};
         for (const row of assignments) {
