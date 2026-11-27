@@ -79,6 +79,11 @@ test('admin can sign in, navigate to staff management, and filter the directory 
   await page.locator('#loginBtn').click();
 
   await expect(page.locator('#app')).toBeVisible();
+  await expect(page.locator('#workspaceHero')).toBeVisible();
+  await expect(page.locator('#workspaceTitle')).toHaveText('Clarity across every shift.');
+  await expect(page.locator('#heroDepartment')).toHaveText('ISOC');
+  await expect(page.locator('#heroStaffCount')).toHaveText('3');
+  await expect(page.locator('#heroAssignmentCount')).toHaveText('0');
   await expect(page.locator('#meName')).toHaveText('Test Admin');
   await expect(page.locator('#tab-team')).toBeVisible();
 
