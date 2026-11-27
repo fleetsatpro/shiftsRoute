@@ -269,22 +269,7 @@ async function loadStaffTable() {
   }).join('');
 }
 
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function safeShiftCode(value) {
-  return ['D', 'N', 'DC', 'NC', 'O', 'L'].includes(value) ? value : 'O';
-}
-
-function safeStatus(value) {
-  return ['draft', 'published', 'pending', 'approved', 'rejected'].includes(value) ? value : 'unknown';
-}
+import { escHtml, safeShiftCode, safeStatus } from './ui-utils.js';
 
 // ── Actions ───────────────────────────────────────────────
 async function generate() {
