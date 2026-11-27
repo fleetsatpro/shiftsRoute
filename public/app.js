@@ -569,15 +569,17 @@ async function cancelSwap(id) {
 // ── Workforce workspaces ──────────────────────────────────
 async function loadHRWorkspace() {
   const month = el('month')?.value || todayMonth();
-  const [staff, qualifications, leave, overview] = await Promise.all([
+  const [staff, qualifications, leave, overview, policies] = await Promise.all([
     api('/hr/staff'),
     api('/workforce/qualifications'),
     api('/leave?month=' + encodeURIComponent(month)),
     api('/workforce/overview'),
+    api('/workforce/policies'),
   ]);
   state.hrStaff = staff;
   state.hrQualifications = qualifications;
   state.hrLeave = leave;
+  state.hrPolicies = policies;
   el('hrActiveCount').textContent = staff.filter(person => person.active).length;
   el('hrPendingCount').textContent = staff.filter(person => person.active && !person.pin_set).length;
   el('hrQualificationCount').textContent = qualifications.filter(q => !q.effective_to).length;
@@ -592,6 +594,8 @@ async function loadHRWorkspace() {
   const select = el('hrQualStaff');
   select.innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
   el('hrLeaveStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrPolicyStaff').innerHTML = operationalStaff.map(person => `<option value="${escHtml(person.id)}">${escHtml(person.name)} · ${escHtml(person.department_id)}</option>`).join('');
+  el('hrPolicyRows').innerHTML = policies.map(policy => `<div class="list-row"><strong>${escHtml(policy.staff_name)}</strong><span class="muted">${escHtml(policy.night_mode)} · max ${policy.max_consecutive_days} consecutive · rest ${policy.min_rest_hours}h</span></div>`).join('');
   el('hrLeaveRows').innerHTML = leave.map(item => `<div class="list-row"><strong>${escHtml(item.date)}</strong> · ${escHtml(staff.find(person => person.id === item.staff_id)?.name || item.staff_id)} <span class="muted">${escHtml(item.status)}</span></div>`).join('') || '<p class="muted">No leave recorded for this month.</p>';
   el('hrQualificationRows').innerHTML = qualifications.map(q => `
     <div class="list-row"><strong>${escHtml(q.staff_name)}</strong> · ${escHtml(q.department_name)}
@@ -650,6 +654,21 @@ async function loadDutyWorkspace() {
     <div class="list-row"><strong>${escHtml(item.staff_name)}</strong> · ${escHtml(item.date)} · ${escHtml(item.shift_code)}
     <span class="muted">${escHtml(item.status)} · ${escHtml(item.reason)}</span>
     ${item.status === 'pending' ? `<button class="ghost" data-exception-action="approved" data-exception-id="${escHtml(item.id)}">Approve</button><button class="ghost" data-exception-action="rejected" data-exception-id="${escHtml(item.id)}">Reject</button>` : ''}</div>`).join('') || '<p class="muted">No emergency exceptions recorded.</p>';
+}
+
+async function saveHrPolicy(event) {
+  event.preventDefault();
+  const payload = {
+    staff_id: el('hrPolicyStaff').value,
+    night_mode: el('hrPolicyNight').value,
+    max_consecutive_days: Number(el('hrPolicyStreak').value),
+    min_rest_hours: Number(el('hrPolicyRest').value),
+  };
+  try {
+    await api('/workforce/policies', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await loadHRWorkspace();
+    toast('Shift policy saved and audit recorded.', 'success');
+  } catch(err) { toast(err.message, 'error'); }
 }
 
 async function saveHrLeave(event) {
@@ -1211,6 +1230,7 @@ function init() {
   el('hrConfirmAdd').addEventListener('click', addHrEmployee);
   el('hrAddModal').addEventListener('click', e => { if (e.target === el('hrAddModal')) closeModal('hrAddModal'); });
   el('hrQualificationForm').addEventListener('submit', saveHrQualification);
+  el('hrPolicyForm').addEventListener('submit', saveHrPolicy);
   el('hrLeaveForm').addEventListener('submit', saveHrLeave);
   el('dutyExceptions').addEventListener('click', event => {
     const button = event.target.closest('[data-exception-action]');
