@@ -383,6 +383,10 @@ export default {
       // ── Staff ─────────────────────────────────────────────────────────
       if (pathname === '/api/staff' && request.method === 'GET') {
         const requestedDept = url.searchParams.get('department');
+        if (isAdmin && url.searchParams.get('all') === '1') {
+          const { results } = await env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name').all();
+          return json(results);
+        }
         const dept = isAdmin ? requestedDept : me.department_id;
         if (dept) {
           const { results } = await env.DB.prepare(
