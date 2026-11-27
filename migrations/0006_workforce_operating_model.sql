@@ -179,3 +179,15 @@ WHERE staff_id = 'hilda' AND department_id = 'ISOC' AND effective_to IS NULL;
 
 -- No initial Duty Ops assignments are fabricated. The rota generator must
 -- create a complete, validated daily rotation before publication.
+
+CREATE TABLE IF NOT EXISTS workforce_audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id TEXT NOT NULL REFERENCES staff(id),
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_workforce_audit_created ON workforce_audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_workforce_audit_entity ON workforce_audit_events(entity_type, entity_id);
