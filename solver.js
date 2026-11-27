@@ -105,7 +105,7 @@ export function generateSchedule({ month, department, staff, leaveByStaff, prior
     if (nightRestRule && shiftCode === dayCode && prevCode === nightCode) return false;
 
     // Rule: max 5 consecutive working days
-    if (consecutiveWork >= 5) return false;
+    if (consecutiveWork >= (staff.find(person => person.id === staffId)?.max_consecutive_days ?? 5)) return false;
 
     return true;
   }
