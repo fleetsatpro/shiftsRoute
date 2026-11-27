@@ -391,6 +391,8 @@ export default {
         }
         const { results: priorRows } = await env.DB.prepare("SELECT manager_staff_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND manager_staff_id IS NOT NULL GROUP BY manager_staff_id").bind(body.month + '-01', body.month + '-01').all();
         const counts = new Map(managers.results.map(manager => [manager.id, priorRows.find(row => row.manager_staff_id === manager.id)?.total || 0]));
+        const { results: priorTeamRows } = await env.DB.prepare("SELECT coverage_department_id, COUNT(*) AS total FROM duty_ops_assignments WHERE duty_date < ? AND duty_date >= date(?, '-90 days') AND coverage_department_id IS NOT NULL GROUP BY coverage_department_id").bind(body.month + '-01', body.month + '-01').all();
+        const teamCoverCounts = new Map(dayDemand.map(department => [department.id, priorTeamRows.find(row => row.coverage_department_id === department.id)?.total || 0]));
         const statements = [];
         const exceptions = [];
         for (let day = 1; day <= days; day++) {
@@ -413,11 +415,12 @@ export default {
               const bDeficit = b.day_min - (dayCoverage.get(date + ':' + b.id)?.size || 0);
               const aRatio = aDeficit / Math.max(1, a.day_min);
               const bRatio = bDeficit / Math.max(1, b.day_min);
-              return (bRatio - aRatio) || a.id.localeCompare(b.id);
+              return (bRatio - aRatio) || ((teamCoverCounts.get(a.id) || 0) - (teamCoverCounts.get(b.id) || 0)) || a.id.localeCompare(b.id);
             });
             teamDepartment = shortages[0]?.id || null;
           }
           const assignmentType = teamDepartment ? 'team_cover' : 'floating';
+          if (teamDepartment) teamCoverCounts.set(teamDepartment, (teamCoverCounts.get(teamDepartment) || 0) + 1);
           if (chosen) counts.set(chosen.id, (counts.get(chosen.id) || 0) + 1);
           else exceptions.push(date);
           const id = crypto.randomUUID();
