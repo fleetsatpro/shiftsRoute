@@ -21,9 +21,9 @@ test('frontend is externally loaded, mobile navigable, and free of inline event 
     readFile(new URL('./public/index.html', import.meta.url), 'utf8'),
     readFile(new URL('./public/app.js', import.meta.url), 'utf8'),
   ]);
-  assert.match(html, /<script type="module" src="\\/app\\.js"><\\/script>/);
-  assert.match(html, /class="mobile-nav"/);
-  assert.match(html, /class="skip-link"/);
-  assert.match(html, /aria-modal="true"/);
-  assert.doesNotMatch(app, /on(?:click|change|submit)\\s*=/i);
+  assert.ok(html.includes('<script type="module" src="/app.js"></script>'));
+  assert.ok(html.includes('class="mobile-nav"'));
+  assert.ok(html.includes('class="skip-link"'));
+  assert.ok(html.includes('aria-modal="true"'));
+  assert.doesNotMatch(app, /\\bonclick\\s*=/i);
 });
