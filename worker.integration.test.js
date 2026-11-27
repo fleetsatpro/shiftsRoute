@@ -57,7 +57,7 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     worker = spawn('npx', [
       'wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', '8788',
       '--config', config, '--persist-to', persistDir, '--log-level', 'error',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    ], { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let workerLogs = '';
     worker.stdout.on('data', chunk => { workerLogs += chunk.toString(); });
     worker.stderr.on('data', chunk => { workerLogs += chunk.toString(); });
@@ -118,9 +118,17 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const afterLogout = await fetch(baseUrl + '/api/auth/me', { headers: { cookie: freshCookie } });
     assert.equal(afterLogout.status, 401);
   } finally {
-    if (worker && worker.exitCode === null) {
-      worker.kill('SIGTERM');
+    if (worker) {
+      // Wrangler's npx shim launches workerd/esbuild descendants. Kill the
+      // whole process group so a failed assertion cannot leave CI hanging.
+      try {
+        if (process.platform !== 'win32') process.kill(-worker.pid, 'SIGTERM');
+        else worker.kill('SIGTERM');
+      } catch {
+        worker.kill('SIGTERM');
+      }
       await new Promise(resolve => {
+        if (worker.exitCode !== null) return resolve();
         const timer = setTimeout(resolve, 3_000);
         worker.once('exit', () => { clearTimeout(timer); resolve(); });
       });
