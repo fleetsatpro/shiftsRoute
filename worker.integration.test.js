@@ -358,6 +358,29 @@ test('real Worker + isolated local D1: enrollment, authentication, authorization
     const reliefItems = await visibleRelief.json();
     assert.ok(reliefItems.some(row => row.id === requested.id && row.status === 'approved'));
     assert.ok(reliefItems.some(row => row.id === clintonRelief.id && row.status === 'approved'));
+
+    // HR assigns an effective-dated, anchored cycle. Re-generation must
+    // preserve the sequence rather than let the fairness optimiser reshuffle it.
+    const rotationResponse = await fetch(baseUrl + '/api/workforce/rotation-patterns', {
+      method: 'POST', headers: { cookie: mercyCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staff_id: 'cate', department_id: 'ISOC',
+        effective_from: '2026-12-01', anchor_date: '2026-12-01',
+        cycle_codes: ['D','D','O','O'],
+      }),
+    });
+    assert.equal(rotationResponse.status, 201, await rotationResponse.clone().text());
+    const rotationList = await fetch(baseUrl + '/api/workforce/rotation-patterns?month=2026-12', { headers: { cookie: mercyCookie } });
+    assert.equal(rotationList.status, 200);
+    assert.ok((await rotationList.json()).some(pattern => pattern.staff_id === 'cate'
+      && pattern.department_id === 'ISOC'
+      && pattern.cycle_codes.join(',') === 'D,D,O,O'));
+    const rotatedIsoc = await generateDepartment('ISOC');
+    const cateAssignments = new Map(rotatedIsoc.assignments.filter(row => row.staff_id === 'cate').map(row => [row.date,row.shift_code]));
+    for (let day = 1; day <= 12; day++) {
+      const date = '2026-12-' + String(day).padStart(2,'0');
+      assert.equal(cateAssignments.get(date), ['D','D','O','O'][(day-1)%4], 'Cate rotation day ' + date);
+    }
   } finally {
     if (worker) {
       // Wrangler's npx shim launches workerd/esbuild descendants. Kill the
