@@ -305,7 +305,7 @@ export default {
         return json({ id, status: 'pending' }, { status: 201 });
       }
 
-      const exceptionMatch = pathname.match(/^\\/api\\/workforce\\/shift-exceptions\\/([^/]+)$/);
+      const exceptionMatch = pathname.match(/^\/api\/workforce\/shift-exceptions\/([^/]+)$/);
       if (exceptionMatch && request.method === 'PATCH') {
         const denied = requireAnyPermission('exceptions.approve');
         if (denied) return denied;
@@ -426,7 +426,7 @@ export default {
         return json({ id, ok: true }, { status: 201 });
       }
 
-      const hrStaffMatch = pathname.match(/^\\/api\\/hr\\/staff\\/([^/]+)$/);
+      const hrStaffMatch = pathname.match(/^\/api\/hr\/staff\/([^/]+)$/);
       if (hrStaffMatch && request.method === 'PATCH') {
         const denied = requireAnyPermission('staff.lifecycle');
         if (denied) return denied;
