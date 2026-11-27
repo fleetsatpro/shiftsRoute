@@ -1019,7 +1019,7 @@ function renderGrid() {
 
   for (const staffId of Object.keys(byStaff)) {
     const { name, days } = byStaff[staffId];
-    let dayCount = 0, nightCount = 0, leaveCount = 0;
+    let dayCount = 0, nightCount = 0, leaveCount = 0, auxiliaryCount = 0;
     const meRow = staffId === state.me.id ? ' me' : '';
     html += `<tr class="${meRow.trim()}"><td class="name-col">${escHtml(name)}</td>`;
     for (let d = 1; d <= nDays; d++) {
@@ -1029,6 +1029,7 @@ function renderGrid() {
       if (code === codes.day) dayCount++;
       else if (code === codes.night) nightCount++;
       else if (LEAVE_CODES.has(code)) leaveCount++;
+      else if (AUXILIARY_WORK_CODES.has(code)) auxiliaryCount++;
       const wk = isWeekend(month, d) ? ' weekend' : '';
       const ov = cell.override ? ' override' : '';
       const locked = isAdmin ? '' : ' locked';
@@ -1037,7 +1038,7 @@ function renderGrid() {
         <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${ds}" data-code="${code}" aria-label="${escHtml(name)} on ${ds}: ${code}" ${isAdmin ? '' : 'disabled'}>${code}</button>
       </td>`;
     }
-    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount}</td></tr>`;
+    html += `<td class="totals-col">${dayCount}</td><td class="totals-col">${nightCount}</td><td class="totals-col">${leaveCount}</td><td class="totals-col">${dayCount + nightCount + auxiliaryCount}</td></tr>`;
   }
   html += '</tbody></table>';
   wrap.innerHTML = html;
