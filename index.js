@@ -827,7 +827,7 @@ export default {
         }
 
         const dept = await env.DB.prepare('SELECT * FROM departments WHERE id = ?')
-          .bind(me.department_id).first();
+          .bind(schedule.department_id).first();
 
         const { results: assignments } = await env.DB.prepare(
           `SELECT sa.staff_id, st.name AS staff_name, sa.date, sa.shift_code
@@ -835,8 +835,9 @@ export default {
            JOIN staff st ON st.id = sa.staff_id
            JOIN staff_department_qualifications q ON q.staff_id = st.id AND q.department_id = ?
            WHERE sa.schedule_id = ? AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?)
+             AND q.effective_from = (SELECT MAX(q2.effective_from) FROM staff_department_qualifications q2 WHERE q2.staff_id=st.id AND q2.department_id=q.department_id AND q2.effective_from <= ? AND (q2.effective_to IS NULL OR q2.effective_to >= ?))
            ORDER BY sa.date, st.name`
-        ).bind(schedule.department_id, id, schedule.month + '-31', schedule.month + '-01').all();
+        ).bind(schedule.department_id, id, schedule.month + '-31', schedule.month + '-01', schedule.month + '-31', schedule.month + '-01').all();
 
         const myShifts = {};
         for (const row of assignments) {
