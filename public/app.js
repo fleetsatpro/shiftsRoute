@@ -196,6 +196,7 @@ async function startApp() {
   await loadMyLeave();
   await loadLatest();
   setTab(isAdmin ? 'team' : 'mine');
+  updateWorkspaceHero();
   if (isAdmin) await loadStaffTable();
 }
 
@@ -563,8 +564,34 @@ function setTab(tab) {
   if (tab === 'staff') loadStaffTable().catch(err => toast('Could not load staff: ' + err.message, 'error'));
 }
 
+function updateWorkspaceHero() {
+  const root = el('workspaceHero');
+  if (!root || !state.me) return;
+  const department = state.department === 'SCE' ? 'SCE / SCM' : 'ISOC';
+  const assignments = (state.schedule?.assignments || []).filter(row => row.department_id === state.department);
+  const rostered = new Set(assignments.map(row => row.staff_id)).size;
+  const status = state.schedule ? safeStatus(state.schedule.status) : '';
+  const statusLabel = status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Awaiting roster';
+  el('heroDepartment').textContent = department;
+  el('heroPeriod').textContent = state.month || 'Period not selected';
+  el('heroStaffCount').textContent = Number(state.staff?.length || 0).toLocaleString();
+  el('heroAssignmentCount').textContent = assignments.length.toLocaleString();
+  el('heroScheduleState').textContent = statusLabel;
+  el('heroScheduleDetail').textContent = state.schedule
+    ? `${rostered.toLocaleString()} people represented · ${assignments.length.toLocaleString()} recorded assignments`
+    : `No schedule loaded for ${state.month || 'this period'}`;
+  el('heroDescription').textContent = state.me.role === 'admin'
+    ? 'Coordinate staffing, coverage and operational readiness across your desk.'
+    : 'Your shifts, leave and team coordination — clearly organised in one place.';
+  root.dataset.scheduleState = status || 'empty';
+  qsa('[data-hero-tab]').forEach(button => {
+    button.classList.toggle('is-current', button.dataset.heroTab === state.activeTab);
+  });
+}
+
 // ── Render ────────────────────────────────────────────────
 function renderAll() {
+  updateWorkspaceHero();
   renderStatus();
   renderMine();
   renderMyLeave();
@@ -971,6 +998,7 @@ function init() {
   el('publishBtn').addEventListener('click', publish);
   el('exportBtn').addEventListener('click', exportCsv);
   el('logoutBtn').addEventListener('click', logout);
+  qsa('[data-hero-tab]').forEach(button => button.addEventListener('click', () => setTab(button.dataset.heroTab)));
 
   // Nav buttons
   qsa('.nav-btn[data-tab]').forEach(btn => {

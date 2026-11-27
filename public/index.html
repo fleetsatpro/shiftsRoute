@@ -1085,6 +1085,30 @@
     </nav>
 
     <main id="mainContent" tabindex="-1">
+      <section class="workspace-hero" id="workspaceHero" aria-labelledby="workspaceTitle">
+        <div class="hero-orbit hero-orbit-one" aria-hidden="true"></div>
+        <div class="hero-orbit hero-orbit-two" aria-hidden="true"></div>
+        <div class="hero-copy">
+          <div class="hero-eyebrow"><span class="hero-live-dot" aria-hidden="true"></span><span>OPERATIONS WORKSPACE</span><span class="hero-eyebrow-divider">/</span><span id="heroDepartment">ISOC</span></div>
+          <h1 id="workspaceTitle">Clarity across every shift.</h1>
+          <p id="heroDescription">Your operational picture, schedules and team coordination in one place.</p>
+          <div class="hero-actions">
+            <button type="button" class="hero-action-primary" data-hero-tab="mine">My schedule <span aria-hidden="true">↗</span></button>
+            <button type="button" class="hero-action-secondary admin-only hidden" data-hero-tab="team">Team operations <span aria-hidden="true">↗</span></button>
+            <span class="hero-period" id="heroPeriod">—</span>
+          </div>
+        </div>
+        <div class="hero-side">
+          <div class="hero-status-label">SCHEDULE STATE</div>
+          <div class="hero-status" id="heroScheduleState">Awaiting roster</div>
+          <div class="hero-status-detail" id="heroScheduleDetail">No schedule loaded for this period</div>
+          <div class="hero-stat-row">
+            <div><strong id="heroStaffCount">—</strong><span>TEAM MEMBERS</span></div>
+            <div><strong id="heroAssignmentCount">—</strong><span>ASSIGNMENTS</span></div>
+          </div>
+        </div>
+      </section>
+
       <!-- Controls bar -->
       <div class="controls-bar">
         <div class="ctrl-group">
