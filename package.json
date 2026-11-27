@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:shiftsroutes": "wrangler deploy --config wrangler.shiftsroutes.toml",
-    "test": "node --test",
+    "test": "node --test auth.test.js frontend.test.js index.test.js solver.test.js wrangler-config.test.js",
     "test:e2e": "playwright test",
     "db:migrate:local": "wrangler d1 migrations apply raw-ter-shift --local",
     "db:migrate:preview": "wrangler d1 migrations apply raw-ter-shift-preview --remote --config wrangler.routesa.preview.toml",
