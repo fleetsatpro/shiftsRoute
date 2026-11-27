@@ -717,8 +717,13 @@ export default {
           || body.reason.trim().length < 12 || body.reason.length > 1000) {
           return json({ error: 'A valid employee, trainee date and detailed training note are required' }, { status: 400 });
         }
-        const target = await env.DB.prepare('SELECT id, active FROM staff WHERE id = ?').bind(body.staff_id).first();
+        const target = await env.DB.prepare('SELECT id, active, department_id FROM staff WHERE id = ?').bind(body.staff_id).first();
         if (!target?.active) return json({ error: 'Active employee not found' }, { status: 404 });
+        const plannedRotation = ['ISOC','SCE'].includes(target.department_id)
+          ? await getRotationCodeForDate(body.staff_id, target.department_id, body.date) : null;
+        if (plannedRotation && plannedRotation !== 'O') {
+          return json({ error: 'The employee has a scheduled home-desk rotation on this date; record training only on an available/off day or resolve the roster first' }, { status: 409 });
+        }
         const [leave, relief, schedule] = await Promise.all([
           env.DB.prepare("SELECT id FROM leave_requests WHERE staff_id=? AND date=? AND status IN ('pending','approved')").bind(body.staff_id, body.date).first(),
           env.DB.prepare("SELECT id FROM workforce_relief_assignments WHERE staff_id=? AND duty_date=? AND status IN ('pending','approved')").bind(body.staff_id, body.date).first(),
