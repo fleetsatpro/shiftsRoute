@@ -430,6 +430,11 @@ export default {
         const denied = requireAnyPermission('staff.lifecycle');
         if (denied) return denied;
         const staffId = hrStaffMatch[1];
+        const target = await env.DB.prepare('SELECT role FROM staff WHERE id = ?').bind(staffId).first();
+        if (!target) return json({ error: 'Staff account not found' }, { status: 404 });
+        const targetAuthority = await env.DB.prepare('SELECT authority_level FROM role_hierarchy WHERE role = ?').bind(target.role).first();
+        const hrAuthority = await env.DB.prepare("SELECT authority_level FROM role_hierarchy WHERE role = 'hr'").first();
+        if (targetAuthority?.authority_level >= (hrAuthority?.authority_level ?? 700)) return json({ error: 'HR cannot alter accounts at or above HR authority' }, { status: 403 });
         const body = await request.json();
         const updates = [], binds = [];
         if (typeof body.name === 'string' && body.name.trim().length >= 2 && body.name.length <= 120) { updates.push('name = ?'); binds.push(body.name.trim()); }
