@@ -277,7 +277,7 @@ async function loadStaffTable() {
     const name = escHtml(s.name);
     const actions = [];
     if (s.id !== state.me.id) actions.push(`<button type="button" class="ghost" data-action="reset-pin" data-staff-id="${id}" data-staff-name="${name}">Reset PIN</button>`);
-    if (s.id !== state.me.id) {
+    if (s.id !== state.me.id && (state.me.role === 'admin' || !['admin','duty_ops_manager'].includes(s.role))) {
       const roleOptions = state.me.role === 'admin'
         ? ['staff','technical_assistant','hr','duty_ops_manager','admin']
         : ['staff','technical_assistant','hr'];
