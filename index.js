@@ -840,8 +840,8 @@ export default {
         const dept = isAdmin ? requestedDept : me.department_id;
         if (dept) {
           const { results } = await env.DB.prepare(
-            "SELECT DISTINCT s.id, s.name, s.department_id, s.role, s.pin_set FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active=1 AND q.effective_from <= date('now') AND (q.effective_to IS NULL OR q.effective_to >= date('now')) ORDER BY s.name"
-          ).bind(dept).all();
+            "SELECT DISTINCT s.id, s.name, s.department_id, s.role, s.pin_set FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active=1 AND (? = 1 OR COALESCE(q.relief_only,0)=0) AND q.effective_from <= date('now') AND (q.effective_to IS NULL OR q.effective_to >= date('now')) ORDER BY s.name"
+          ).bind(dept, isAdmin ? 1 : 0).all();
           return json(results);
         }
         const { results } = await env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name').all();

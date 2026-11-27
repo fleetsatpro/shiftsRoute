@@ -1035,7 +1035,7 @@ function renderGrid() {
     const heading = document.createElement('strong');
     heading.textContent = 'Coverage warnings';
     const message = document.createElement('p');
-    message.textContent = state.schedule.notes.replace(/^Warnings:\\s*/, '');
+    message.textContent = state.schedule.notes.replace(/^Warnings:\s*/, '');
     banner.append(heading, message);
     box.appendChild(banner);
   }
