@@ -25,5 +25,5 @@ test('frontend is externally loaded, mobile navigable, and free of inline event 
   assert.ok(html.includes('class="mobile-nav"'));
   assert.ok(html.includes('class="skip-link"'));
   assert.ok(html.includes('aria-modal="true"'));
-  assert.doesNotMatch(app, /\\bonclick\\s*=/i);
+  assert.doesNotMatch(app, /\bonclick\s*=/i);
 });
