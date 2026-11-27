@@ -1,6 +1,6 @@
 # ROC Workforce Operating Model
 
-Status: implementation specification for the workforce-model feature branch. This document is not a claim that the described capabilities are already implemented or deployed.
+Status: implementation and release specification for PR #2. The workforce schema, core Worker APIs, solver eligibility controls, HR workspace and Duty Ops workspace are implemented on the feature branch. Production migration and deployment remain separate release steps.
 
 ## Product goals
 
@@ -34,7 +34,7 @@ Store policy as records, not name-based branches in application code.
 - Schedule run: policy snapshot/version, solver version, input snapshot, objective score, hard-constraint results, soft-constraint/fairness metrics, warnings and audit trail.
 - Exceptions: requested by, approved by, reason, affected person/date/shift, expiry and before/after values.
 
-Changes to qualifications and policies must be effective-dated so historical schedules remain explainable.
+Changes to qualifications are effective-dated so historical schedules remain explainable. Shift-policy records currently store the configured minimum-rest target; exact hour-based rest enforcement requires department shift start/end windows to be configured. The solver currently enforces the department night-to-day rest rule and per-person maximum consecutive work days.
 
 ## Initial workforce configuration requested
 
@@ -72,10 +72,21 @@ Optimize lexicographically or with documented weights for:
 
 The optimizer must report infeasibility and explain the smallest shortage set rather than quietly relaxing constraints. Emergency overrides are separate audited actions, not solver defaults.
 
+## Implemented behavior on the feature branch
+
+- Role permissions are read from D1 capability records; DOMs and the platform administrator have the full operational permission set.
+- DOMs have authority level 900; Griffin has platform-owner level 1000. DOMs cannot modify accounts at or above their own authority.
+- The monthly Duty Ops rota balances manager duty counts and cross-team shortage coverage. Uncovered dates are explicit exceptions, never fabricated assignments.
+- Team-cover Duty Ops assignments are locked into future generated department rosters; the solver preserves these fixed assignments.
+- Cross-qualified staff are included once per department and can only receive shift types enabled by their effective qualification and shift policy.
+- Wayne's Technical Assistant role is day-only. Night work requires a date-specific exception requested with a reason and approved by a different authorized reviewer.
+- HR can onboard operational staff, manage leave, record qualifications and configure per-person shift policies. New employees have no scheduling qualification until HR records verified eligibility.
+- David is deactivated and sessions are revoked; historical schedule records remain intact.
+
 ## Interfaces
 
 - **Staff workspace:** simple sign-in; personal roster, leave, swaps, announcements and clear shift explanations.
-- **Duty Ops workspace:** full admin-capable command workspace for Hilda and Mukasa, today's duty manager, day/night coverage by team, live shortage board, cross-team support eligibility, handover, policy controls, approvals and exception workflow. DOMs outrank all controllers in the operational hierarchy.
+- **Duty Ops workspace:** full admin-capable command workspace for Hilda and Mukasa, daily rota generation, day/night coverage by team, shortage-directed cross-team support, handover, policy controls, approvals, audit and emergency exception workflow. DOMs outrank all controllers in the operational hierarchy.
 - **HR workspace:** staff lifecycle, onboarding/offboarding, leave, availability, qualification records, effective dates and HR reporting.
 - **Admin workspace:** policy/coverage configuration, role and permission management, solver controls, audit log, schedule approval and publication.
 - **Technical workspace:** service health, technical notices and eligible support assignments; no privileged HR data.
