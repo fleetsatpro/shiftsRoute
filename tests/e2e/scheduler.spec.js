@@ -124,3 +124,17 @@ test('staff account cannot see admin navigation or privileged controls', async (
   await expect(page.locator('#publishBtn')).toBeHidden();
   await expect(page.locator('#tab-mine')).toBeVisible();
 });
+
+test('theme system offers distinct palettes and remembers the selected theme', async ({ page }) => {
+  await installIsolatedApi(page, 'admin');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await expect(page.getByLabel('Choose interface theme')).toBeVisible();
+  await expect(page.locator('#themeSelect option')).toHaveCount(5);
+  await page.locator('#themeSelect').selectOption('amethyst');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'amethyst');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('shiftsroute-theme'))).toBe('amethyst');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'amethyst');
+  await expect(page.locator('#themeSelect')).toHaveValue('amethyst');
+});
