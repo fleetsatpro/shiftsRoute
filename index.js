@@ -385,10 +385,13 @@ export default {
       if (pathname === '/api/staff' && request.method === 'GET') {
         const requestedDept = url.searchParams.get('department');
         const dept = isAdmin ? requestedDept : me.department_id;
-        const stmt = dept
-          ? env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE department_id = ? AND active = 1 ORDER BY name').bind(dept)
-          : env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name');
-        const { results } = await stmt.all();
+        if (dept) {
+          const { results } = await env.DB.prepare(
+            "SELECT DISTINCT s.id, s.name, s.department_id, s.role, s.pin_set FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active=1 AND q.effective_from <= date('now') AND (q.effective_to IS NULL OR q.effective_to >= date('now')) ORDER BY s.name"
+          ).bind(dept).all();
+          return json(results);
+        }
+        const { results } = await env.DB.prepare('SELECT id, name, department_id, role, pin_set FROM staff WHERE active = 1 ORDER BY department_id, name').all();
         return json(results);
       }
 
@@ -647,8 +650,8 @@ export default {
         if (!dept) return json({ error: 'Unknown department' }, { status: 404 });
 
         const { results: staffRows } = await env.DB.prepare(
-          'SELECT id, name FROM staff WHERE department_id = ? AND active = 1 ORDER BY name'
-        ).bind(department_id).all();
+          "SELECT DISTINCT s.id, s.name, q.can_day, q.can_night FROM staff s JOIN staff_department_qualifications q ON q.staff_id=s.id WHERE q.department_id = ? AND s.active = 1 AND q.effective_from <= ? AND (q.effective_to IS NULL OR q.effective_to >= ?) ORDER BY s.name"
+        ).bind(department_id, month + '-31', month + '-01').all();
 
         if (staffRows.length === 0) {
           return json({ error: 'No active staff in this department' }, { status: 400 });
@@ -719,7 +722,10 @@ export default {
       if (mineMatch && request.method === 'GET') {
         const id = mineMatch[1];
         const schedule = await env.DB.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first();
-        if (!schedule || schedule.department_id !== me.department_id) {
+        const qualification = schedule ? await env.DB.prepare(
+          "SELECT 1 AS eligible FROM staff_department_qualifications WHERE staff_id = ? AND department_id = ? AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?) LIMIT 1"
+        ).bind(me.id, schedule.department_id, schedule.month + '-31', schedule.month + '-01').first() : null;
+        if (!schedule || (schedule.department_id !== me.department_id && !qualification)) {
           return json({ error: 'Not found' }, { status: 404 });
         }
 
