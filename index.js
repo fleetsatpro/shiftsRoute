@@ -243,6 +243,11 @@ export default {
         if (person.department_id === target_department_id) {
           return { ok: false, status: 409, error: 'This is the employee’s home desk; use the normal roster allocation instead of cross-team relief' };
         }
+        const homeRotationCode = ['ISOC','SCE'].includes(person.department_id)
+          ? await getRotationCodeForDate(staff_id, person.department_id, duty_date) : null;
+        if (homeRotationCode && homeRotationCode !== 'O') {
+          return { ok: false, status: 409, error: 'The employee is scheduled for a home-desk rotation on this date and cannot be cross-deployed' };
+        }
         const qualification = await env.DB.prepare(
           'SELECT can_day, can_night, relief_only FROM staff_department_qualifications ' +
           'WHERE staff_id = ? AND department_id = ? AND effective_from <= ? ' +
@@ -333,6 +338,20 @@ export default {
           shortage = { covered, minimum };
         }
         return { ok: true, person, qualification, targetDepartment, display_code, shortage };
+      }
+
+      async function getRotationCodeForDate(staffId, departmentId, date) {
+        const pattern = await env.DB.prepare(
+          "SELECT cycle_codes_json,anchor_date FROM workforce_rotation_patterns " +
+          "WHERE staff_id=? AND department_id=? AND effective_from<=? " +
+          "AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC LIMIT 1"
+        ).bind(staffId, departmentId, date, date).first();
+        if (!pattern) return null;
+        let cycle;
+        try { cycle = JSON.parse(pattern.cycle_codes_json); } catch { return null; }
+        if (!Array.isArray(cycle) || !cycle.length) return null;
+        const offset = Math.floor((Date.parse(date+'T00:00:00Z') - Date.parse(pattern.anchor_date+'T00:00:00Z')) / 86400000);
+        return cycle[((offset % cycle.length) + cycle.length) % cycle.length] || null;
       }
 
       // ── Admin: reset another staff member's PIN ───────────────────────
@@ -577,6 +596,105 @@ export default {
         ).bind(me.id, 'relief.' + body.status, 'workforce_relief_assignment', relief.id,
           JSON.stringify({ staff_id: relief.staff_id, duty_date: relief.duty_date, target_department_id: relief.target_department_id, shift_code: relief.shift_code })).run();
         return json({ ok: true, status: body.status });
+      }
+
+      if (pathname === '/api/workforce/rotation-patterns' && request.method === 'GET') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const month = url.searchParams.get('month');
+        if (!isValidMonth(month)) return json({ error: 'Valid month is required' }, { status: 400 });
+        const { results } = await env.DB.prepare(
+          'SELECT rp.*,s.name AS staff_name,d.name AS department_name ' +
+          'FROM workforce_rotation_patterns rp JOIN staff s ON s.id=rp.staff_id ' +
+          'JOIN departments d ON d.id=rp.department_id ' +
+          'WHERE rp.effective_from<=? AND (rp.effective_to IS NULL OR rp.effective_to>=?) ' +
+          'ORDER BY d.name,s.name,rp.effective_from'
+        ).bind(month+'-31',month+'-01').all();
+        return json(results.map(row => {
+          let cycle_codes = [];
+          try { cycle_codes = JSON.parse(row.cycle_codes_json); } catch {}
+          return { ...row, cycle_codes };
+        }));
+      }
+
+      if (pathname === '/api/workforce/rotation-patterns' && request.method === 'POST') {
+        const denied = requireAnyPermission('qualifications.manage');
+        if (denied) return denied;
+        const body = await request.json();
+        if (typeof body.staff_id !== 'string' || typeof body.department_id !== 'string'
+          || !isValidCalendarDate(body.effective_from) || !isValidCalendarDate(body.anchor_date)
+          || !Array.isArray(body.cycle_codes) || body.cycle_codes.length < 1 || body.cycle_codes.length > 28) {
+          return json({ error: 'Select an employee and desk, provide valid effective/anchor dates and a 1–28 day rotation cycle' }, { status: 400 });
+        }
+        const effectiveFrom = body.effective_from;
+        if (effectiveFrom < new Date().toISOString().slice(0,10)) {
+          return json({ error: 'Rotation changes are prospective; do not rewrite historical schedules' }, { status: 409 });
+        }
+        const [person, department, qualification, policy] = await Promise.all([
+          env.DB.prepare('SELECT id,name,department_id,active,role FROM staff WHERE id=?').bind(body.staff_id).first(),
+          env.DB.prepare('SELECT id,day_code,night_code FROM departments WHERE id=? AND operational_team=1').bind(body.department_id).first(),
+          env.DB.prepare(
+            'SELECT can_day,can_night,relief_only,effective_from,effective_to FROM staff_department_qualifications ' +
+            'WHERE staff_id=? AND department_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ' +
+            'ORDER BY effective_from DESC LIMIT 1'
+          ).bind(body.staff_id,body.department_id,effectiveFrom,effectiveFrom).first(),
+          env.DB.prepare('SELECT night_mode,max_consecutive_days FROM staff_shift_policies WHERE staff_id=?').bind(body.staff_id).first(),
+        ]);
+        if (!person?.active || person.department_id !== body.department_id || person.role === 'duty_ops_manager') {
+          return json({ error: 'A rotation pattern can only be assigned to active primary staff on their home operational desk' }, { status: 409 });
+        }
+        if (!department || !qualification || qualification.relief_only === 1) {
+          return json({ error: 'An effective primary desk qualification is required before setting a rotation' }, { status: 409 });
+        }
+        const allowedCodes = new Set([department.day_code,department.night_code,'O']);
+        if (body.cycle_codes.some(code => typeof code !== 'string' || !allowedCodes.has(code))) {
+          return json({ error: 'Use only this desk’s day code, night code and O (Off) in the rotation cycle' }, { status: 400 });
+        }
+        if (body.cycle_codes.includes(department.day_code) && qualification.can_day !== 1) {
+          return json({ error: 'The employee is not qualified for day shifts on this desk' }, { status: 409 });
+        }
+        if (body.cycle_codes.includes(department.night_code)
+          && (qualification.can_night !== 1 || (policy?.night_mode && policy.night_mode !== 'allowed'))) {
+          return json({ error: 'The employee is not approved for recurring night shifts under the current policy; use the separate emergency exception process where permitted' }, { status: 409 });
+        }
+        const maximum = Number(policy?.max_consecutive_days || 5);
+        let run = 0, previousType = null;
+        for (const code of [...body.cycle_codes,...body.cycle_codes]) {
+          if (code === 'O') { run = 0; previousType = null; continue; }
+          const type = code === department.night_code ? 'night' : 'day';
+          if (type === 'day' && previousType === 'night') {
+            return json({ error: 'Rotation cycle must include recovery time between night and day duty' }, { status: 409 });
+          }
+          run++;
+          if (run > maximum) return json({ error: 'Rotation cycle exceeds this employee’s consecutive-work limit' }, { status: 409 });
+          previousType = type;
+        }
+        const existing = await env.DB.prepare(
+          'SELECT id,effective_from FROM workforce_rotation_patterns WHERE staff_id=? AND department_id=? AND effective_to IS NULL ORDER BY effective_from DESC LIMIT 1'
+        ).bind(body.staff_id,body.department_id).first();
+        if (existing && effectiveFrom < existing.effective_from) {
+          return json({ error: 'A rotation change cannot be backdated before the current effective pattern' }, { status: 409 });
+        }
+        const patternId = existing?.effective_from === effectiveFrom ? existing.id : uuid();
+        const statements = [];
+        if (existing && existing.effective_from === effectiveFrom) {
+          statements.push(env.DB.prepare(
+            'UPDATE workforce_rotation_patterns SET anchor_date=?,cycle_codes_json=?,created_by=?,created_at=CURRENT_TIMESTAMP WHERE id=?'
+          ).bind(body.anchor_date,JSON.stringify(body.cycle_codes),me.id,patternId));
+        } else {
+          if (existing) statements.push(env.DB.prepare(
+            "UPDATE workforce_rotation_patterns SET effective_to=date(?,'-1 day') WHERE id=?"
+          ).bind(effectiveFrom,existing.id));
+          statements.push(env.DB.prepare(
+            'INSERT INTO workforce_rotation_patterns (id,staff_id,department_id,effective_from,anchor_date,cycle_codes_json,created_by) VALUES (?,?,?,?,?,?,?)'
+          ).bind(patternId,body.staff_id,body.department_id,effectiveFrom,body.anchor_date,JSON.stringify(body.cycle_codes),me.id));
+        }
+        statements.push(env.DB.prepare(
+          'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
+        ).bind(me.id,'rotation_pattern.updated','staff_rotation_pattern',patternId,
+          JSON.stringify({ staff_id:body.staff_id,department_id:body.department_id,effective_from:effectiveFrom,anchor_date:body.anchor_date,cycle_codes:body.cycle_codes })));
+        await env.DB.batch(statements);
+        return json({ id:patternId,status:'saved',staff_id:body.staff_id,department_id:body.department_id,effective_from:effectiveFrom,anchor_date:body.anchor_date,cycle_codes:body.cycle_codes },{status:201});
       }
 
       if (pathname === '/api/workforce/staff-markers' && request.method === 'GET') {
@@ -1172,6 +1290,33 @@ export default {
         ).bind(department_id, month + '-31', month + '-01', month + '-31', month + '-01').all();
 
         const fixedAssignments = Object.create(null);
+        const { results: rotationRows } = await env.DB.prepare(
+          'SELECT rp.*,s.name AS staff_name FROM workforce_rotation_patterns rp ' +
+          'JOIN staff s ON s.id=rp.staff_id WHERE rp.department_id=? AND s.active=1 ' +
+          'AND rp.effective_from<=? AND (rp.effective_to IS NULL OR rp.effective_to>=?) ORDER BY rp.effective_from,s.name'
+        ).bind(department_id,month+'-31',month+'-01').all();
+        const monthDays = daysInMonth(month);
+        for (const pattern of rotationRows) {
+          const person = staffRows.find(item => item.id === pattern.staff_id);
+          if (!person) return json({ error: 'Rotation pattern for ' + pattern.staff_name + ' has no current primary qualification on ' + department_id }, { status: 409 });
+          let cycle;
+          try { cycle = JSON.parse(pattern.cycle_codes_json); } catch {
+            return json({ error: 'Invalid rotation cycle data for ' + pattern.staff_name }, { status: 409 });
+          }
+          if (!Array.isArray(cycle) || !cycle.length) return json({ error: 'Empty rotation cycle for ' + pattern.staff_name }, { status: 409 });
+          for (let day=1;day<=monthDays;day++) {
+            const date=dateStr(month,day);
+            if (date<pattern.effective_from || (pattern.effective_to && date>pattern.effective_to)) continue;
+            const offset=Math.floor((Date.parse(date+'T00:00:00Z')-Date.parse(pattern.anchor_date+'T00:00:00Z'))/86400000);
+            const code=cycle[((offset%cycle.length)+cycle.length)%cycle.length];
+            if (![dept.day_code,dept.night_code,'O'].includes(code)) {
+              return json({ error: 'Rotation pattern for ' + pattern.staff_name + ' contains an unsupported shift code for ' + department_id }, { status: 409 });
+            }
+            if (!fixedAssignments[pattern.staff_id]) fixedAssignments[pattern.staff_id]=Object.create(null);
+            fixedAssignments[pattern.staff_id][date]={shift_code:code,assignment_source:'rotation'};
+          }
+        }
+
         const { results: reliefRows } = await env.DB.prepare(
           'SELECT r.*, s.name, s.department_id AS home_department_id, q.can_day, ' +
           "CASE WHEN COALESCE(p.night_mode,'allowed')='allowed' THEN q.can_night ELSE 0 END AS can_night, " +
@@ -1210,6 +1355,7 @@ export default {
             shift_code: relief.display_code,
             coverage_department_id: relief.target_department_id,
             coverage_shift_code: relief.shift_code,
+            assignment_source: relief.display_code === 'FSA' ? 'field_supervisor' : 'relief',
           };
         }
 
@@ -1268,8 +1414,9 @@ export default {
         ).bind(month + '-%', ...staffRows.map(s => s.id)).all();
         for (const marker of trainingRows) {
           if (!fixedAssignments[marker.staff_id]) fixedAssignments[marker.staff_id] = Object.create(null);
-          if (!fixedAssignments[marker.staff_id][marker.date]) {
-            fixedAssignments[marker.staff_id][marker.date] = { shift_code: marker.marker_code };
+          const existingFixed = fixedAssignments[marker.staff_id][marker.date];
+          if (!existingFixed || (existingFixed.assignment_source === 'rotation' && existingFixed.shift_code === 'O')) {
+            fixedAssignments[marker.staff_id][marker.date] = { shift_code: marker.marker_code, assignment_source:'training' };
           }
         }
 
@@ -1296,10 +1443,11 @@ export default {
             const ds = dateStr(month, d);
             inserts.push(
               env.DB.prepare(
-                'INSERT INTO shift_assignments (id, schedule_id, staff_id, date, shift_code, is_manual_override, coverage_department_id, coverage_shift_code) VALUES (?, ?, ?, ?, ?, 0, ?, ?)'
+                'INSERT INTO shift_assignments (id, schedule_id, staff_id, date, shift_code, is_manual_override, coverage_department_id, coverage_shift_code, assignment_source) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)'
               ).bind(uuid(), scheduleId, s.id, ds, assignments[s.id][ds],
                 assignmentMeta[s.id]?.[ds]?.coverage_department_id || null,
-                assignmentMeta[s.id]?.[ds]?.coverage_shift_code || null)
+                assignmentMeta[s.id]?.[ds]?.coverage_shift_code || null,
+                assignmentMeta[s.id]?.[ds]?.assignment_source || 'generated')
             );
           }
         }
