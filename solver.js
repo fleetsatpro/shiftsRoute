@@ -121,7 +121,27 @@ export function generateSchedule({
     if (state[person.id][day] !== null) return false;
     const { prevType, consecutiveWork } = lastWorkInfo(person.id, day);
     if (nightRestRule && shiftCode === dayCode && prevType === 'night') return false;
-    return consecutiveWork < (person.max_consecutive_days ?? 5);
+
+    // A future approved relief, rotation or Duty Ops cover is already locked
+    // in state before the allocator starts. Do not create a night immediately
+    // before fixed day activity, or a run that will exceed the limit once the
+    // future locked work is reached.
+    const nextDay = day + 1;
+    const nextDate = nextDay <= nDays ? dateStr(month, nextDay) : null;
+    const nextIsLocked = nextDate && lockedAssignments.has(person.id + ':' + nextDate);
+    const nextCode = nextIsLocked ? actualShiftCode(person.id, nextDay) : null;
+    const nextIsDayActivity = nextIsLocked
+      && (shiftType(nextCode) === 'day' || state[person.id][nextDay] === 'T');
+    if (nightRestRule && shiftCode === nightCode && nextIsDayActivity) return false;
+
+    let futureFixedWork = 0;
+    for (let futureDay = day + 1; futureDay <= nDays; futureDay++) {
+      const futureDate = dateStr(month, futureDay);
+      if (!lockedAssignments.has(person.id + ':' + futureDate)) break;
+      if (!isWorkCode(state[person.id][futureDay])) break;
+      futureFixedWork++;
+    }
+    return consecutiveWork + 1 + futureFixedWork <= (person.max_consecutive_days ?? 5);
   }
 
   function canPlaceFixed(person, day, value, date) {

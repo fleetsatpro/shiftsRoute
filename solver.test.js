@@ -269,3 +269,48 @@ test('allocator excludes a worker already at the consecutive-work maximum before
   assert.equal(result.assignments['b-ready']['2026-12-01'], 'DC');
   assert.ok(!result.warnings.some(warning => warning.includes('only 0/1 available')));
 });
+
+
+test('allocator reserves recovery before a future fixed day relief assignment', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'SCE', day_code: 'DC', night_code: 'NC', day_min: 1, day_max: 1, night_min: 1, night_max: 1, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-relief', name: 'Relief controller', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    fixedAssignments: {
+      'a-relief': {
+        '2026-12-18': {
+          shift_code: 'FSA',
+          coverage_department_id: 'ISOC',
+          coverage_shift_code: 'D',
+          assignment_source: 'relief',
+        },
+      },
+    },
+  });
+  assert.equal(result.assignments['a-relief']['2026-12-17'], 'O',
+    'a night before a locked daytime relief assignment must be excluded');
+  assert.equal(result.assignments['b-ready']['2026-12-17'], 'NC',
+    'the allocator should use a compliant alternative when one exists');
+  assert.equal(result.assignments['a-relief']['2026-12-18'], 'FSA');
+});
+
+test('allocator reserves consecutive-work capacity before future locked work', () => {
+  const result = generateSchedule({
+    month: '2026-12',
+    department: { id: 'ISOC', day_code: 'D', night_code: 'N', day_min: 1, day_max: 1, night_min: 0, night_max: 0, night_rest_rule: 1 },
+    staff: [
+      { id: 'a-reserved', name: 'Reserved controller', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+      { id: 'b-ready', name: 'Ready colleague', can_day: 1, can_night: 1, max_consecutive_days: 5 },
+    ],
+    fixedAssignments: {
+      'a-reserved': { '2026-12-18': { shift_code: 'D', assignment_source: 'relief' } },
+    },
+    priorFinalState: { 'a-reserved': { lastShift: 'day', consecutiveWork: 4 } },
+  });
+  assert.equal(result.assignments['a-reserved']['2026-12-17'], 'O',
+    'the prior streak plus 17th and 18th would exceed five consecutive days');
+  assert.equal(result.assignments['b-ready']['2026-12-17'], 'D');
+});
