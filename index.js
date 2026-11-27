@@ -465,6 +465,37 @@ export default {
           'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
         ).bind(me.id, 'qualification.updated', 'staff_qualification', body.staff_id + ':' + body.department_id,
           JSON.stringify({ department_id: body.department_id, can_day: day, can_night: night, relief_only: reliefOnly, effective_from: body.effective_from })));
+        if (staff.department_id === 'SCE' && body.department_id === 'SCE') {
+          // A newly verified SCE home-desk qualification automatically grants
+          // matching day/night eligibility for ISOC relief, never routine cover.
+          const crossExisting = await env.DB.prepare(
+            'SELECT effective_from FROM staff_department_qualifications WHERE staff_id=? AND department_id=? AND effective_to IS NULL ORDER BY effective_from DESC LIMIT 1'
+          ).bind(body.staff_id, 'ISOC').first();
+          if (crossExisting && body.effective_from < crossExisting.effective_from) {
+            return json({ error: 'The mirrored ISOC relief qualification cannot be backdated before its current effective record' }, { status: 409 });
+          }
+          if (crossExisting && body.effective_from === crossExisting.effective_from) {
+            statements.push(env.DB.prepare(
+              'UPDATE staff_department_qualifications SET can_day=?, can_night=?, priority=?, relief_only=1, approved_by=?, approval_note=? WHERE staff_id=? AND department_id=? AND effective_from=?'
+            ).bind(day, night, priority, me.id,
+              'SCE qualification mirrored to ISOC as emergency relief only: ' + approvalNote,
+              body.staff_id, 'ISOC', crossExisting.effective_from));
+          } else {
+            if (crossExisting) statements.push(env.DB.prepare(
+              "UPDATE staff_department_qualifications SET effective_to=date(?,'-1 day') WHERE staff_id=? AND department_id=? AND effective_to IS NULL"
+            ).bind(body.effective_from, body.staff_id, 'ISOC'));
+            statements.push(env.DB.prepare(
+              'INSERT INTO staff_department_qualifications (staff_id,department_id,can_day,can_night,priority,effective_from,approved_by,approval_note,relief_only) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)'
+            ).bind(body.staff_id, 'ISOC', day, night, Math.min(950, priority),
+              body.effective_from, me.id,
+              'SCE qualification mirrored to ISOC as emergency relief only: ' + approvalNote));
+          }
+          statements.push(env.DB.prepare(
+            'INSERT INTO workforce_audit_events (actor_id,action,entity_type,entity_id,details_json) VALUES (?,?,?,?,?)'
+          ).bind(me.id, 'qualification.relief_mirrored', 'staff_qualification',
+            body.staff_id + ':ISOC',
+            JSON.stringify({ source_department_id: 'SCE', can_day: day, can_night: night, relief_only: 1, effective_from: body.effective_from })));
+        }
         await env.DB.batch(statements);
         return json({ ok: true }, { status: 201 });
       }
@@ -797,13 +828,6 @@ export default {
           env.DB.prepare("INSERT INTO staff_shift_policies (staff_id, night_mode, max_consecutive_days, min_rest_hours, effective_from) VALUES (?, 'restricted', 5, 11, date('now'))").bind(id),
           env.DB.prepare('INSERT INTO workforce_audit_events (actor_id, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)').bind(me.id, 'staff.created', 'staff', id, JSON.stringify({ department_id: body.department_id }))
         ];
-        // Every SCE controller has an effective ISOC cross-qualification, but
-        // it is relief-only and can never enter the routine ISOC candidate pool.
-        if (body.department_id === 'SCE') {
-          statements.push(env.DB.prepare(
-            "INSERT INTO staff_department_qualifications (staff_id,department_id,can_day,can_night,priority,effective_from,approved_by,approval_note,relief_only) VALUES (?,'ISOC',1,1,950,date('now'),?,'SCE-to-ISOC emergency relief only; separate Duty Ops approval required',1)"
-          ).bind(id, me.id));
-        }
         await env.DB.batch(statements);
         return json({ id, ok: true }, { status: 201 });
       }
