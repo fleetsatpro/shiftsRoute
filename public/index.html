@@ -1317,6 +1317,17 @@
           <div id="hrQualificationRows" class="leave-list"></div>
         </div>
         <div class="panel">
+          <div class="panel-header"><h2>Individual shift policies</h2><span class="muted">Eligibility and work limits</span></div>
+          <form id="hrPolicyForm" class="leave-form">
+            <label class="ctrl-label" for="hrPolicyStaff">Employee</label><select id="hrPolicyStaff" required></select>
+            <label class="ctrl-label" for="hrPolicyNight">Night work policy</label><select id="hrPolicyNight"><option value="allowed">Allowed</option><option value="restricted">Restricted</option><option value="exception_only">Emergency exception only</option><option value="prohibited">Prohibited</option></select>
+            <label class="ctrl-label" for="hrPolicyStreak">Maximum consecutive work days</label><input id="hrPolicyStreak" type="number" min="1" max="7" value="5" required />
+            <label class="ctrl-label" for="hrPolicyRest">Minimum rest hours</label><input id="hrPolicyRest" type="number" min="8" max="24" value="11" required />
+            <button class="primary" type="submit">Save shift policy</button>
+          </form>
+          <div id="hrPolicyRows" class="leave-list"></div>
+        </div>
+        <div class="panel">
           <div class="panel-header"><h2>Leave and absence</h2></div>
           <form id="hrLeaveForm" class="leave-form">
             <label class="ctrl-label" for="hrLeaveStaff">Employee</label><select id="hrLeaveStaff" required></select>
