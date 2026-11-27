@@ -943,14 +943,14 @@
       <!-- Controls bar -->
       <div class="controls-bar">
         <div class="ctrl-group">
-          <span class="ctrl-label">Dept</span>
+          <label class="ctrl-label" for="dept">Dept</label>
           <select id="dept">
             <option value="ISOC">ISOC</option>
             <option value="SCE">SCE / SCM</option>
           </select>
         </div>
         <div class="ctrl-group">
-          <span class="ctrl-label">Month</span>
+          <label class="ctrl-label" for="month">Month</label>
           <input type="month" id="month" />
         </div>
         <button id="loadBtn" type="button">Reload</button>
@@ -1075,9 +1075,9 @@
             <span style="color:var(--text-3);font-size:11px;">These dates are fixed — the solver schedules around them</span>
           </div>
           <div class="leave-form">
-            <span class="ctrl-label">Staff</span>
+            <label class="ctrl-label" for="leaveStaff">Staff</label>
             <select id="leaveStaff"></select>
-            <span class="ctrl-label">Date</span>
+            <label class="ctrl-label" for="leaveDate">Date</label>
             <input type="date" id="leaveDate" />
             <button id="addLeaveBtn" class="primary">Add leave</button>
           </div>
