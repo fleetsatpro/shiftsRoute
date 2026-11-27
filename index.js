@@ -1468,7 +1468,7 @@ export default {
         }
 
         const { results: assignments } = await env.DB.prepare(
-          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, sa.date, sa.shift_code, sa.is_manual_override,
+          `SELECT sa.staff_id, st.name AS staff_name, st.department_id, st.role AS role, sa.date, sa.shift_code, sa.is_manual_override,
                   sa.coverage_department_id, sa.coverage_shift_code
            FROM shift_assignments sa
            JOIN staff st ON st.id = sa.staff_id

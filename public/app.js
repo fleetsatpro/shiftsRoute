@@ -1002,7 +1002,7 @@ function renderLeaveList() {
 function renderScheduleMetrics() {
   const panel = el('teamMetrics');
   const rows = (state.schedule?.assignments || []).filter(row =>
-    row.department_id === state.department || row.coverage_department_id === state.department
+    row.department_id === state.department || row.coverage_department_id === state.department || row.role === 'duty_ops_manager'
   );
   if (!rows.length) {
     panel.classList.add('hidden');
@@ -1060,10 +1060,11 @@ function renderGrid() {
   for (const row of state.schedule.assignments) {
     const isHomeRow = row.department_id === state.department;
     const isReliefTargetRow = row.coverage_department_id === state.department;
-    if (!isHomeRow && !isReliefTargetRow) continue;
+    const isDutyOpsCover = row.role === 'duty_ops_manager';
+    if (!isHomeRow && !isReliefTargetRow && !isDutyOpsCover) continue;
     if (!byStaff[row.staff_id]) {
       byStaff[row.staff_id] = {
-        name: row.staff_name, homeDepartment: row.department_id,
+        name: row.staff_name, role: row.role, homeDepartment: row.department_id,
         days: Object.create(null),
       };
     }
@@ -1074,7 +1075,7 @@ function renderGrid() {
       coverageCode: row.coverage_shift_code || null,
       borrowed: isReliefTargetRow && row.department_id !== state.department,
       outgoing: !!row.coverage_department_id && row.coverage_department_id !== state.department,
-      editable: isAdmin && isHomeRow && !row.coverage_department_id
+      editable: isAdmin && isHomeRow && row.role !== 'duty_ops_manager' && !row.coverage_department_id
         && ['D','N','DC','NC','O','L'].includes(row.shift_code),
     };
   }
@@ -1119,8 +1120,10 @@ function renderGrid() {
     const { name, homeDepartment, days } = person;
     let dayCount = 0, nightCount = 0, leaveCount = 0, workCount = 0;
     const meRow = staffId === state.me.id ? ' me' : '';
-    const homeLabel = homeDepartment !== state.department
-      ? `<span class="roster-origin">From ${escHtml(homeDepartment)}</span>` : '';
+    const homeLabel = person.role === 'duty_ops_manager' && homeDepartment !== state.department
+      ? '<span class="roster-origin">Duty Ops team cover</span>'
+      : homeDepartment !== state.department
+        ? `<span class="roster-origin">From ${escHtml(homeDepartment)}</span>` : '';
     html += `<tr class="${meRow.trim()}"><td class="name-col">${escHtml(name)} ${homeLabel}</td>`;
     for (let day = 1; day <= nDays; day++) {
       const date = dateStr(month, day);
@@ -1140,7 +1143,7 @@ function renderGrid() {
       const locked = editable ? '' : ' locked';
       const extra = cell.coverageDepartment
         ? ` · ${cell.outgoing ? 'Relieving ' + cell.coverageDepartment : 'Relief received'}`
-        : '';
+        : person.role === 'duty_ops_manager' && code !== 'O' ? ' · Duty Ops team cover' : '';
       const title = `${date}: ${SHIFT_LABEL[code] || code}${extra}${cell.override ? ' (manual)' : ''}`;
       html += `<td class="${weekend}${override}${cross}" title="${escHtml(title)}">
         <button type="button" class="cell shift-${code}${locked}" data-staff="${escHtml(staffId)}" data-date="${date}" data-code="${code}" aria-label="${escHtml(name)} on ${date}: ${code}${escHtml(extra)}" ${editable ? '' : 'disabled'}>${code}</button>
